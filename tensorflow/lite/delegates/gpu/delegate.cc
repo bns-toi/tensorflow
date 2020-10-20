@@ -34,7 +34,9 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/model_transformer.h"
 #include "tensorflow/lite/delegates/gpu/common/quantization_util.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
+#ifndef TFLITE_GPU_CL_ONLY
 #include "tensorflow/lite/delegates/gpu/gl/api2.h"
+#endif
 #include "tensorflow/lite/kernels/internal/optimized/optimized_ops.h"
 #include "tensorflow/lite/minimal_logging.h"
 
@@ -73,6 +75,13 @@ class Delegate {
  public:
   explicit Delegate(const TfLiteGpuDelegateOptionsV2* options)
       : num_delegate_kernels_(0) {
+    delegate_.data_ = reinterpret_cast<void*>(this);
+    delegate_.Prepare = DelegatePrepare;
+    delegate_.CopyFromBufferHandle = nullptr;
+    delegate_.CopyToBufferHandle = nullptr;
+    delegate_.FreeBufferHandle = nullptr;
+    delegate_.flags = kTfLiteDelegateFlagsNone;
+      	
     options_ = options ? *options : TfLiteGpuDelegateOptionsV2Default();
     if (options_.max_delegated_partitions <= 0) {
       options_.max_delegated_partitions = 1;
@@ -92,14 +101,7 @@ class Delegate {
   int num_delegate_kernels() const { return num_delegate_kernels_; }
 
  private:
-  TfLiteDelegate delegate_ = {
-      .data_ = reinterpret_cast<void*>(this),
-      .Prepare = DelegatePrepare,
-      .CopyFromBufferHandle = nullptr,
-      .CopyToBufferHandle = nullptr,
-      .FreeBufferHandle = nullptr,
-      .flags = kTfLiteDelegateFlagsNone,
-  };
+  TfLiteDelegate delegate_;
 
   TfLiteGpuDelegateOptionsV2 options_;
   int num_delegate_kernels_ = 0;
@@ -133,8 +135,10 @@ class DelegateKernel {
     if (experimental_flags & TFLITE_GPU_EXPERIMENTAL_FLAGS_CL_ONLY) {
       RETURN_IF_ERROR(
           InitializeOpenClApi(&graph, &builder, &graph_is_destroyed));
+#ifndef TFLITE_GPU_CL_ONLY
     } else if (experimental_flags & TFLITE_GPU_EXPERIMENTAL_FLAGS_GL_ONLY) {
       RETURN_IF_ERROR(InitializeOpenGlApi(&graph, &builder));
+#endif
     } else {
       // By default, we try CL first & fall back to GL if that fails.
       absl::Status status =
@@ -149,8 +153,10 @@ class DelegateKernel {
           RETURN_IF_ERROR(InitializeGraph(context, delegate_params, &graph2,
                                           &input_refs, &output_refs));
         }
+#ifndef TFLITE_GPU_CL_ONLY
         RETURN_IF_ERROR(InitializeOpenGlApi(
             graph_is_destroyed ? &graph2 : &graph, &builder));
+#endif
       }
     }
 
@@ -313,6 +319,7 @@ class DelegateKernel {
     return absl::OkStatus();
   }
 
+#ifndef TFLITE_GPU_CL_ONLY
   absl::Status InitializeOpenGlApi(GraphFloat32* graph,
                                    std::unique_ptr<InferenceBuilder>* builder) {
     gl::InferenceEnvironmentOptions env_options;
@@ -332,11 +339,14 @@ class DelegateKernel {
                          "Initialized OpenGL-based API.");
     return absl::OkStatus();
   }
+#endif
 
   // The Delegate instance that's shared across all DelegateKernel instances.
   Delegate* const delegate_;  // doesn't own the memory.
   std::unique_ptr<cl::InferenceEnvironment> cl_environment_;
+#ifndef TFLITE_GPU_CL_ONLY
   std::unique_ptr<gl::InferenceEnvironment> gl_environment_;
+#endif
   std::unique_ptr<InferenceRunner> runner_;
   std::vector<int64_t> input_indices_;
   std::vector<int64_t> output_indices_;
@@ -433,17 +443,15 @@ TfLiteStatus DelegatePrepare(TfLiteContext* context, TfLiteDelegate* delegate) {
 }  // namespace tflite
 
 TfLiteGpuDelegateOptionsV2 TfLiteGpuDelegateOptionsV2Default() {
-  TfLiteGpuDelegateOptionsV2 options = {
-      // set it to -1 to detect whether it was later adjusted.
-      .is_precision_loss_allowed = -1,
-      .inference_preference =
-          TFLITE_GPU_INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER,
-      .inference_priority1 = TFLITE_GPU_INFERENCE_PRIORITY_MAX_PRECISION,
-      .inference_priority2 = TFLITE_GPU_INFERENCE_PRIORITY_AUTO,
-      .inference_priority3 = TFLITE_GPU_INFERENCE_PRIORITY_AUTO,
-      .experimental_flags = TFLITE_GPU_EXPERIMENTAL_FLAGS_NONE,
-      .max_delegated_partitions = 1,
-  };
+  TfLiteGpuDelegateOptionsV2 options;
+  // set it to -1 to detect whether it was later adjusted.
+  options.is_precision_loss_allowed = -1;
+  options.inference_preference = TFLITE_GPU_INFERENCE_PREFERENCE_FAST_SINGLE_ANSWER;
+  options.inference_priority1 = TFLITE_GPU_INFERENCE_PRIORITY_MAX_PRECISION;
+  options.inference_priority2 = TFLITE_GPU_INFERENCE_PRIORITY_AUTO;
+  options.inference_priority3 = TFLITE_GPU_INFERENCE_PRIORITY_AUTO;
+  options.experimental_flags = TFLITE_GPU_EXPERIMENTAL_FLAGS_NONE;
+  options.max_delegated_partitions = 1;
   return options;
 }
 

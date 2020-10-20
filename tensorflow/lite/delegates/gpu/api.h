@@ -43,7 +43,9 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/data_type.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
 #include "tensorflow/lite/delegates/gpu/common/util.h"
+#ifndef TFLITE_GPU_CL_ONLY
 #include "tensorflow/lite/delegates/gpu/gl/portable_gl31.h"
+#endif
 #include <vulkan/vulkan.h>
 
 namespace tflite {
@@ -66,8 +68,10 @@ enum class DataLayout {
 
 enum class ObjectType {
   UNKNOWN,
+#ifndef TFLITE_GPU_CL_ONLY
   OPENGL_SSBO,
   OPENGL_TEXTURE,
+#endif
   CPU_MEMORY,
   OPENCL_TEXTURE,
   OPENCL_BUFFER,
@@ -75,6 +79,7 @@ enum class ObjectType {
   VULKAN_TEXTURE
 };
 
+#ifndef TFLITE_GPU_CL_ONLY
 struct OpenGlBuffer {
   OpenGlBuffer() = default;
   explicit OpenGlBuffer(GLuint new_id) : id(new_id) {}
@@ -90,6 +95,7 @@ struct OpenGlTexture {
   GLuint id = GL_INVALID_INDEX;
   GLenum format = GL_INVALID_ENUM;
 };
+#endif
 
 struct OpenClBuffer {
   OpenClBuffer() = default;
@@ -224,8 +230,12 @@ bool IsValid(const TensorObjectDef& def);
 uint32_t NumElements(const TensorObjectDef& def);
 
 using TensorObject =
-    absl::variant<absl::monostate, OpenGlBuffer, OpenGlTexture, CpuMemory,
-                  OpenClBuffer, OpenClTexture, VulkanBuffer, VulkanTexture>;
+    absl::variant<absl::monostate
+#ifndef TFLITE_GPU_CL_ONLY
+                  , OpenGlBuffer, OpenGlTexture
+#endif
+                  , CpuMemory
+                  , OpenClBuffer, OpenClTexture, VulkanBuffer, VulkanTexture>;
 
 // @return true if object is set and corresponding values are defined.
 bool IsValid(const TensorObjectDef& def, const TensorObject& object);

@@ -579,7 +579,9 @@ absl::Status Arguments::Bind(cl_kernel kernel, int offset) {
 
 std::string Arguments::AddActiveArgument(const std::string& arg_name,
                                          bool use_f32_for_halfs) {
-  if (auto it = int_values_.find(arg_name); it != int_values_.end()) {
+  {
+  auto it = int_values_.find(arg_name);
+  if (it != int_values_.end()) {
     int int_index;
     if (it->second.active) {
       int_index = it->second.offset;
@@ -593,7 +595,10 @@ std::string Arguments::AddActiveArgument(const std::string& arg_name,
     std::string postfixes[4] = {"x", "y", "z", "w"};
     return "shared_int4_" + index + "." + postfixes[int_index % 4];
   }
-  if (auto it = float_values_.find(arg_name); it != float_values_.end()) {
+  }
+  {
+  auto it = float_values_.find(arg_name);
+  if (it != float_values_.end()) {
     int float_index;
     if (it->second.active) {
       float_index = it->second.offset;
@@ -607,7 +612,10 @@ std::string Arguments::AddActiveArgument(const std::string& arg_name,
     std::string postfixes[4] = {"x", "y", "z", "w"};
     return "shared_float4_" + index + "." + postfixes[float_index % 4];
   }
-  if (auto it = half_values_.find(arg_name); it != half_values_.end()) {
+  }
+  {
+  auto it = half_values_.find(arg_name);
+  if (it != half_values_.end()) {
     int half_index;
     if (it->second.active) {
       half_index = it->second.offset;
@@ -631,6 +639,7 @@ std::string Arguments::AddActiveArgument(const std::string& arg_name,
     } else {
       return "shared_half4_" + index + "." + postfixes[half_index % 4];
     }
+  }
   }
   return arg_name;
 }
@@ -675,20 +684,27 @@ absl::Status Arguments::ResolveSelector(
     const std::vector<std::string>& template_args, std::string* result) {
   const GPUObjectDescriptor* desc_ptr;
   AccessType access_type;
-  if (auto it = object_refs_.find(object_name); it != object_refs_.end()) {
-    desc_ptr = it->second.descriptor.get();
-    access_type = it->second.access_type;
-  } else if (auto it = objects_.find(object_name); it != objects_.end()) {
+  {
+  auto it = object_refs_.find(object_name);
+  if (it != object_refs_.end()) {
     desc_ptr = it->second.descriptor.get();
     access_type = it->second.access_type;
   } else {
-    return absl::NotFoundError(
-        absl::StrCat("No object with name - ", object_name));
+  	auto it1 = objects_.find(object_name);
+    if (it1 != objects_.end()) {
+      desc_ptr = it1->second.descriptor.get();
+      access_type = it1->second.access_type;
+    } else {
+      return absl::NotFoundError(
+          absl::StrCat("No object with name - ", object_name));
+    }
+  }
   }
   auto names = desc_ptr->GetGPUResources(access_type).GetNames();
   const auto* tensor_desc = dynamic_cast<const TensorDescriptor*>(desc_ptr);
   if (tensor_desc && selector == "Write") {
-    if (auto it = linkables.find(object_name); it != linkables.end()) {
+    auto it = linkables.find(object_name);
+    if (it != linkables.end()) {
       if (access_type != AccessType::WRITE &&
           access_type != AccessType::READ_WRITE) {
         return absl::FailedPreconditionError(absl::StrCat(

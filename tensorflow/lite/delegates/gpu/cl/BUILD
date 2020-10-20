@@ -1,3 +1,4 @@
+load("//tensorflow:tensorflow.bzl", "if_windows")
 load("@flatbuffers//:build_defs.bzl", "flatbuffer_cc_library")
 load(
     "//tensorflow/core/platform:build_config_root.bzl",
@@ -8,6 +9,10 @@ package(
     default_visibility = ["//visibility:public"],
     licenses = ["notice"],  # Apache 2.0
 )
+
+TFLITE_GPU_DEFAULT_COPTS = if_windows([
+    "-DTFLITE_GPU_CL_ONLY"
+])
 
 cc_library(
     name = "api",
@@ -28,6 +33,34 @@ cc_library(
         ":tensor_type_util",
         "//tensorflow/lite/delegates/gpu:api",
         "//tensorflow/lite/delegates/gpu/cl/kernels:converter",
+        "//tensorflow/lite/delegates/gpu/common:data_type",
+        "//tensorflow/lite/delegates/gpu/common:model",
+        "//tensorflow/lite/delegates/gpu/common:shape",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common:tensor",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "cl_api",
+    srcs = ["api.cc"],
+    hdrs = ["api.h"],
+    copts = TFLITE_GPU_DEFAULT_COPTS,
+    deps = [
+        ":cl_command_queue",
+        ":cl_errors",
+        ":cl_event",
+        ":environment",
+        ":inference_context",
+        ":opencl_wrapper",
+        ":precision",
+        ":tensor",
+        ":tensor_type",
+        ":cl_tensor_type_util",
+        "//tensorflow/lite/delegates/gpu:cl_api",
+        "//tensorflow/lite/delegates/gpu/cl/kernels:cl_converter",
         "//tensorflow/lite/delegates/gpu/common:data_type",
         "//tensorflow/lite/delegates/gpu/common:model",
         "//tensorflow/lite/delegates/gpu/common:shape",
@@ -513,6 +546,17 @@ cc_library(
     deps = [
         ":tensor_type",
         "//tensorflow/lite/delegates/gpu:api",
+    ],
+)
+
+cc_library(
+    name = "cl_tensor_type_util",
+    srcs = ["tensor_type_util.cc"],
+    hdrs = ["tensor_type_util.h"],
+    copts = TFLITE_GPU_DEFAULT_COPTS,
+    deps = [
+        ":tensor_type",
+        "//tensorflow/lite/delegates/gpu:cl_api",
     ],
 )
 

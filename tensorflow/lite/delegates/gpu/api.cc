@@ -21,10 +21,12 @@ namespace {
 
 struct ObjectTypeGetter {
   ObjectType operator()(absl::monostate) const { return ObjectType::UNKNOWN; }
+#ifndef TFLITE_GPU_CL_ONLY
   ObjectType operator()(OpenGlBuffer) const { return ObjectType::OPENGL_SSBO; }
   ObjectType operator()(OpenGlTexture) const {
     return ObjectType::OPENGL_TEXTURE;
   }
+#endif
   ObjectType operator()(OpenClBuffer) const {
     return ObjectType::OPENCL_BUFFER;
   }
@@ -42,10 +44,12 @@ struct ObjectTypeGetter {
 
 struct ObjectValidityChecker {
   bool operator()(absl::monostate) const { return false; }
+#ifndef TFLITE_GPU_CL_ONLY
   bool operator()(OpenGlBuffer obj) const { return obj.id != GL_INVALID_INDEX; }
   bool operator()(OpenGlTexture obj) const {
     return obj.id != GL_INVALID_INDEX && obj.format != GL_INVALID_ENUM;
   }
+#endif
   bool operator()(OpenClBuffer obj) const { return obj.memobj; }
   bool operator()(OpenClTexture obj) const { return obj.memobj; }
   bool operator()(VulkanBuffer obj) const { return obj.memory; }
@@ -81,10 +85,12 @@ bool IsObjectPresent(ObjectType type, const TensorObject& obj) {
   switch (type) {
     case ObjectType::CPU_MEMORY:
       return absl::holds_alternative<CpuMemory>(obj);
+#ifndef TFLITE_GPU_CL_ONLY
     case ObjectType::OPENGL_SSBO:
       return absl::holds_alternative<OpenGlBuffer>(obj);
     case ObjectType::OPENGL_TEXTURE:
       return absl::holds_alternative<OpenGlTexture>(obj);
+#endif
     case ObjectType::OPENCL_BUFFER:
       return absl::holds_alternative<OpenClBuffer>(obj);
     case ObjectType::OPENCL_TEXTURE:

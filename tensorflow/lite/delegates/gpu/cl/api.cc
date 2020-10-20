@@ -15,7 +15,9 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/cl/api.h"
 
+#ifndef TFLITE_GPU_CL_ONLY
 #include <EGL/eglext.h>
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -25,9 +27,13 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/cl/cl_command_queue.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_errors.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_event.h"
+#ifndef TFLITE_GPU_CL_ONLY
 #include "tensorflow/lite/delegates/gpu/cl/egl_sync.h"
+#endif
 #include "tensorflow/lite/delegates/gpu/cl/environment.h"
+#ifndef TFLITE_GPU_CL_ONLY
 #include "tensorflow/lite/delegates/gpu/cl/gl_interop.h"
+#endif
 #include "tensorflow/lite/delegates/gpu/cl/inference_context.h"
 #include "tensorflow/lite/delegates/gpu/cl/kernels/converter.h"
 #include "tensorflow/lite/delegates/gpu/cl/opencl_wrapper.h"
@@ -87,11 +93,13 @@ class DefaultTensorTie : public TensorTie {
       const TensorTieDef& def,
       const TensorObjectConverterBuilder& converter_builder) {
     auto object_type = def.external_def.object_def.object_type;
+#ifndef TFLITE_GPU_CL_ONLY
     if (def.external_def.object_def.user_provided &&
         GlClBufferCopier::IsSupported(def.external_def.object_def,
                                       def.internal_def.object_def)) {
       return true;
     }
+#endif
     return (object_type == ObjectType::OPENCL_BUFFER ||
             object_type == ObjectType::OPENCL_TEXTURE ||
             object_type == ObjectType::CPU_MEMORY) &&
@@ -138,21 +146,29 @@ class DefaultTensorTie : public TensorTie {
  private:
   absl::Status Init(TensorObjectConverterBuilder* converter_builder,
                     Environment* env) {
+#ifndef TFLITE_GPU_CL_ONLY
     if (def().external_def.object_def.user_provided &&
         GlClBufferCopier::IsSupported(def().external_def.object_def,
                                       def().internal_def.object_def)) {
       converter_from_ = absl::make_unique<GlClBufferCopier>(
           def().internal_def, def().external_def, env);
     } else {
+#else
+	{
+#endif
       RETURN_IF_ERROR(converter_builder->MakeConverter(
           def().external_def, def().internal_def, &converter_from_));
     }
+#ifndef TFLITE_GPU_CL_ONLY
     if (def().external_def.object_def.user_provided &&
         GlClBufferCopier::IsSupported(def().internal_def.object_def,
                                       def().external_def.object_def)) {
       converter_to_ = absl::make_unique<GlClBufferCopier>(
           def().internal_def, def().external_def, env);
     } else {
+#else
+	{
+#endif
       RETURN_IF_ERROR(converter_builder->MakeConverter(
           def().internal_def, def().external_def, &converter_to_));
     }
@@ -275,6 +291,7 @@ class TwoStepTensorTie : public TensorTie {
   std::unique_ptr<TensorTie> outer_tie_;
 };
 
+#ifndef TFLITE_GPU_CL_ONLY
 // Captures GL object into CL context before performing a conversion.
 class GlBufferHolder : public TensorTie {
  public:
@@ -351,7 +368,7 @@ class GlBufferHolder : public TensorTie {
   std::unique_ptr<TensorTie> tie_;
   TensorObject external_obj_;
 };
-
+#endif
 TensorObject TensorToObj(const Tensor& tensor) {
   if (tensor.GetStorageType() == TensorStorageType::BUFFER) {
     return OpenClBuffer{tensor.GetMemoryPtr()};
@@ -365,19 +382,26 @@ TensorObject TensorToObj(const Tensor& tensor) {
 // Responsible for creating new tensor objects.
 class TensorTieFactory {
  public:
-  TensorTieFactory(Environment* env, InferenceContext* context,
-                   GlInteropFabric* gl_interop_fabric)
+  TensorTieFactory(Environment* env, InferenceContext* context
+#ifndef TFLITE_GPU_CL_ONLY
+                   , GlInteropFabric* gl_interop_fabric
+#endif
+                   )
       : env_(*env),
         context_(*context),
+#ifndef TFLITE_GPU_CL_ONLY
         gl_interop_fabric_(gl_interop_fabric),
+#endif
         converter_builder_(NewConverterBuilder(env)) {}
 
   bool IsSupported(const TensorTieDef& def) const {
     return IsValid(def.external_def.object_def) &&
            (NoopTensorTie::IsSupported(def) ||
             DefaultTensorTie::IsSupported(def, *converter_builder_) ||
+#ifndef TFLITE_GPU_CL_ONLY
             (gl_interop_fabric_ &&
              GlBufferHolder::IsSupported(def, *converter_builder_)) ||
+#endif
             TwoStepTensorTie::IsSupported(def, *converter_builder_));
   }
 
@@ -392,10 +416,12 @@ class TensorTieFactory {
     if (DefaultTensorTie::IsSupported(def, *converter)) {
       return DefaultTensorTie::New(def, internal_object, converter, &env_, tie);
     }
+#ifndef TFLITE_GPU_CL_ONLY
     if (gl_interop_fabric_ && GlBufferHolder::IsSupported(def, *converter)) {
       return GlBufferHolder::New(def, internal_object, converter,
                                  gl_interop_fabric_, &env_, tie);
     }
+#endif
     if (TwoStepTensorTie::IsSupported(def, *converter)) {
       return TwoStepTensorTie::New(def, internal_object, converter, &env_, tie);
     }
@@ -405,18 +431,26 @@ class TensorTieFactory {
  private:
   Environment& env_;
   InferenceContext& context_;
+#ifndef TFLITE_GPU_CL_ONLY
   GlInteropFabric* gl_interop_fabric_;
+#endif
   std::unique_ptr<TensorObjectConverterBuilder> converter_builder_;
 };
 
 class InferenceRunnerImpl : public InferenceRunner {
  public:
   InferenceRunnerImpl(Environment* environment,
-                      std::unique_ptr<InferenceContext> context,
-                      std::unique_ptr<GlInteropFabric> gl_interop_fabric)
+                      std::unique_ptr<InferenceContext> context
+#ifndef TFLITE_GPU_CL_ONLY
+                      , std::unique_ptr<GlInteropFabric> gl_interop_fabric
+#endif
+                      )
       : queue_(environment->queue()),
-        context_(std::move(context)),
-        gl_interop_fabric_(std::move(gl_interop_fabric)) {}
+        context_(std::move(context))
+#ifndef TFLITE_GPU_CL_ONLY
+        , gl_interop_fabric_(std::move(gl_interop_fabric))
+#endif
+        {}
 
   absl::Status Initialize(const std::vector<TensorTieDef>& inputs,
                           const std::vector<TensorTieDef>& outputs,
@@ -464,9 +498,11 @@ class InferenceRunnerImpl : public InferenceRunner {
   }
 
   absl::Status Run() override {
+#ifndef TFLITE_GPU_CL_ONLY
     if (gl_interop_fabric_) {
       RETURN_IF_ERROR(gl_interop_fabric_->Start());
     }
+#endif
     for (auto& obj : inputs_) {
       RETURN_IF_ERROR(obj->CopyFromExternalObject());
     }
@@ -475,9 +511,11 @@ class InferenceRunnerImpl : public InferenceRunner {
     for (auto& obj : outputs_) {
       RETURN_IF_ERROR(obj->CopyToExternalObject());
     }
+#ifndef TFLITE_GPU_CL_ONLY
     if (gl_interop_fabric_) {
       RETURN_IF_ERROR(gl_interop_fabric_->Finish());
     }
+#endif
     return absl::OkStatus();
   }
 
@@ -506,7 +544,9 @@ class InferenceRunnerImpl : public InferenceRunner {
 
   CLCommandQueue* queue_;
   std::unique_ptr<InferenceContext> context_;
+#ifndef TFLITE_GPU_CL_ONLY
   std::unique_ptr<GlInteropFabric> gl_interop_fabric_;
+#endif
   std::vector<std::unique_ptr<TensorTie>> inputs_;
   std::vector<std::unique_ptr<TensorTie>> outputs_;
 };
@@ -542,13 +582,19 @@ class InferenceBuilderImpl : public InferenceBuilder {
     }
     RETURN_IF_ERROR(context_->InitFromGraph(create_info, graph, environment_));
 
+#ifndef TFLITE_GPU_CL_ONLY
     if (env_options.IsGlAware() &&
         IsGlSharingSupported(environment_->device())) {
       gl_interop_fabric_ = absl::make_unique<GlInteropFabric>(
           env_options.egl_display, environment_);
     }
+#endif
     tie_factory_ = absl::make_unique<TensorTieFactory>(
-        environment_, context_.get(), gl_interop_fabric_.get());
+        environment_, context_.get()
+#ifndef TFLITE_GPU_CL_ONLY
+        , gl_interop_fabric_.get()
+#endif
+        );
 
     inputs_ = LinkTensors(graph, graph.inputs());
     outputs_ = LinkTensors(graph, graph.outputs());
@@ -599,13 +645,19 @@ class InferenceBuilderImpl : public InferenceBuilder {
   }
 
   absl::Status Build(std::unique_ptr<InferenceRunner>* runner) override {
+#ifndef TFLITE_GPU_CL_ONLY
     if (gl_interop_fabric_ && !HasGlObjects()) {
       // destroy interop layer when there are no GL objects to avoid
       // extra synchronization cost.
       gl_interop_fabric_.reset(nullptr);
     }
+#endif
     auto runner_impl = absl::make_unique<InferenceRunnerImpl>(
-        environment_, std::move(context_), std::move(gl_interop_fabric_));
+        environment_, std::move(context_)
+#ifndef TFLITE_GPU_CL_ONLY
+        , std::move(gl_interop_fabric_)
+#endif
+        );
     RETURN_IF_ERROR(
         runner_impl->Initialize(inputs_, outputs_, tie_factory_.get()));
     *runner = std::move(runner_impl);
@@ -675,6 +727,7 @@ class InferenceBuilderImpl : public InferenceBuilder {
     return links;
   }
 
+#ifndef TFLITE_GPU_CL_ONLY
   bool HasGlObjects() const {
     auto is_gl = [](ObjectType t) {
       return t == ObjectType::OPENGL_SSBO || t == ObjectType::OPENGL_TEXTURE;
@@ -691,6 +744,7 @@ class InferenceBuilderImpl : public InferenceBuilder {
     }
     return false;
   }
+#endif
 
   static std::vector<TensorObjectDef> GetExternalDefinitions(
       const std::vector<TensorTieDef>& links) {
@@ -703,7 +757,9 @@ class InferenceBuilderImpl : public InferenceBuilder {
   }
 
   std::unique_ptr<InferenceContext> context_;
+#ifndef TFLITE_GPU_CL_ONLY
   std::unique_ptr<GlInteropFabric> gl_interop_fabric_;
+#endif
   Environment* environment_;
 
   std::vector<TensorTieDef> inputs_;
@@ -730,20 +786,29 @@ class InferenceEnvironmentImpl : public InferenceEnvironment {
       RETURN_IF_ERROR(CreateDefaultGPUDevice(&device));
     }
 
+#ifndef TFLITE_GPU_CL_ONLY
     properties_.is_gl_sharing_supported = IsGlSharingSupported(device);
     properties_.is_gl_to_cl_fast_sync_supported =
         IsClEventFromEglSyncSupported(device);
     properties_.is_cl_to_gl_fast_sync_supported =
         IsEglSyncFromClEventSupported();
+#else
+    properties_.is_gl_sharing_supported = false;
+    properties_.is_gl_to_cl_fast_sync_supported = false;
+    properties_.is_cl_to_gl_fast_sync_supported = false;
+#endif
 
     CLContext context;
     if (options_.context) {
+#ifndef TFLITE_GPU_CL_ONLY
       if (options_.IsGlAware()) {
         return absl::InvalidArgumentError(
             "OpenCL context and EGL parameters are set in the same time.");
       }
+#endif
       context = CLContext(options_.context, /* has_ownership = */ false);
     } else {
+#ifndef TFLITE_GPU_CL_ONLY
       if (options_.IsGlAware() && properties_.is_gl_sharing_supported) {
         RETURN_IF_ERROR(CreateCLGLContext(
             device,
@@ -751,8 +816,11 @@ class InferenceEnvironmentImpl : public InferenceEnvironment {
             reinterpret_cast<cl_context_properties>(options_.egl_display),
             &context));
       } else {
+#endif
         RETURN_IF_ERROR(CreateCLContext(device, &context));
+#ifndef TFLITE_GPU_CL_ONLY
       }
+#endif
     }
 
     CLCommandQueue queue;
