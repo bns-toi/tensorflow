@@ -11,7 +11,7 @@ package(
 )
 
 TFLITE_GPU_DEFAULT_COPTS = if_windows([
-    "-DTFLITE_GPU_CL_ONLY"
+    "-DTFLITE_GPU_CL"
 ])
 
 cc_library(

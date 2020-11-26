@@ -1,0 +1,32 @@
+{
+  "testGroups": {
+    "python": {
+      "script": "tfdml_test_runner.py",
+      "arguments": {
+        "--test_binaries_path": "test_binaries/python",
+        "--test_framework": "abseil"
+      },
+      "flags": [
+        "--log_device_placement"
+      ],
+      "pipDeps": [
+        "numpy==1.18.5",
+        "h5py<3.0.0",
+        "scipy",
+        "portpicker"
+      ],
+      "windowsPipDeps": [
+        "windows-curses"
+      ],
+      "isPythonTest": true
+    },
+    "core": {
+      "script": "tfdml_test_runner.py",
+      "arguments": {
+        "--test_binaries_path": "test_binaries/core",
+        "--test_framework": "gtest"
+      },
+      "isPythonTest": false
+    }
+  }
+}

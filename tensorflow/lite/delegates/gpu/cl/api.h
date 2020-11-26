@@ -16,9 +16,9 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_DELEGATES_GPU_CL_API_H_
 #define TENSORFLOW_LITE_DELEGATES_GPU_CL_API_H_
 
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
 #include <EGL/egl.h>
-#endif
+#endif // TFLITE_GPU_GL
 
 #include <cstdint>
 #include <memory>
@@ -99,10 +99,10 @@ struct InferenceEnvironmentOptions {
   // It is the error to set egl_display, egl_context AND context at the same
   // time. If egl_display and egl_context are set, they will be used to create
   // GL-aware CL context.
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
   EGLDisplay egl_display = EGL_NO_DISPLAY;
   EGLContext egl_context = EGL_NO_CONTEXT;
-#endif
+#endif // TFLITE_GPU_GL
 
   // Should contain data returned from
   // InferenceEnvironment::GetSerializedBinaryCache method.
@@ -110,11 +110,11 @@ struct InferenceEnvironmentOptions {
   // incompatible when GPU driver is updated.
   absl::Span<const uint8_t> serialized_binary_cache;
 
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
   bool IsGlAware() const {
     return egl_context != EGL_NO_CONTEXT && egl_display != EGL_NO_DISPLAY;
   }
-#endif
+#endif // TFLITE_GPU_GL
 };
 
 // Creates new OpenCL environment that needs to stay around until all inference

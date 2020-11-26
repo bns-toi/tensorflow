@@ -26,17 +26,22 @@ limitations under the License.
 #include "tensorflow/lite/builtin_ops.h"
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/delegates/gpu/api.h"
+#ifdef TFLITE_GPU_CL
 #include "tensorflow/lite/delegates/gpu/cl/api.h"
 #include "tensorflow/lite/delegates/gpu/cl/opencl_wrapper.h"
 #include "tensorflow/lite/delegates/gpu/cl/tensor_type_util.h"
+#endif // TFLITE_GPU_CL
 #include "tensorflow/lite/delegates/gpu/common/model.h"
 #include "tensorflow/lite/delegates/gpu/common/model_builder.h"
 #include "tensorflow/lite/delegates/gpu/common/model_transformer.h"
 #include "tensorflow/lite/delegates/gpu/common/quantization_util.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
 #include "tensorflow/lite/delegates/gpu/gl/api2.h"
-#endif
+#endif // TFLITE_GPU_GL
+#ifdef TFLITE_GPU_DML
+#include "tensorflow/lite/delegates/gpu/dml/api.h"
+#endif // TFLITE_GPU_DML
 #include "tensorflow/lite/kernels/internal/optimized/optimized_ops.h"
 #include "tensorflow/lite/minimal_logging.h"
 
@@ -132,17 +137,30 @@ class DelegateKernel {
     std::unique_ptr<InferenceBuilder> builder;
     bool graph_is_destroyed;
     const int experimental_flags = delegate_->options().experimental_flags;
+#ifdef TFLITE_GPU_DML
+      RETURN_IF_ERROR(InitializeDirectMLApi(&graph, &builder));
+#else // TFLITE_GPU_DML
     if (experimental_flags & TFLITE_GPU_EXPERIMENTAL_FLAGS_CL_ONLY) {
+#ifdef TFLITE_GPU_CL
       RETURN_IF_ERROR(
           InitializeOpenClApi(&graph, &builder, &graph_is_destroyed));
-#ifndef TFLITE_GPU_CL_ONLY
+#else // TFLITE_GPU_CL
+      return absl::Status(absl::StatusCode::kInvalidArgument, "Not support OpenCL");
+#endif // TFLITE_GPU_CL
     } else if (experimental_flags & TFLITE_GPU_EXPERIMENTAL_FLAGS_GL_ONLY) {
+#ifdef TFLITE_GPU_GL
       RETURN_IF_ERROR(InitializeOpenGlApi(&graph, &builder));
-#endif
+#else // TFLITE_GPU_GL
+      return absl::Status(absl::StatusCode::kInvalidArgument, "Not support OpenGL");
+#endif // TFLITE_GPU_GL
     } else {
+#ifdef TFLITE_GPU_CL
       // By default, we try CL first & fall back to GL if that fails.
       absl::Status status =
           InitializeOpenClApi(&graph, &builder, &graph_is_destroyed);
+#else // TFLITE_GPU_CL
+      absl::Status(absl::StatusCode::kInvalidArgument, "Not support OpenCL");
+#endif // TFLITE_GPU_CL
       if (!status.ok()) {
         TF_LITE_KERNEL_LOG(context, std::string(status.message()).c_str());
         TF_LITE_KERNEL_LOG(context, "Falling back to OpenGL");
@@ -153,12 +171,15 @@ class DelegateKernel {
           RETURN_IF_ERROR(InitializeGraph(context, delegate_params, &graph2,
                                           &input_refs, &output_refs));
         }
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
         RETURN_IF_ERROR(InitializeOpenGlApi(
             graph_is_destroyed ? &graph2 : &graph, &builder));
-#endif
+#else // TFLITE_GPU_GL
+      return absl::Status(absl::StatusCode::kInvalidArgument, "Not support OpenGL");
+#endif // TFLITE_GPU_GL
       }
     }
+#endif // TFLITE_GPU_DML
 
     // At this point tflite didn't allocate tensors yet, therefore, collect
     // indices and set all input and output tensors from tflite later.
@@ -286,6 +307,7 @@ class DelegateKernel {
     return absl::OkStatus();
   }
 
+#ifdef TFLITE_GPU_CL
   absl::Status InitializeOpenClApi(GraphFloat32* graph,
                                    std::unique_ptr<InferenceBuilder>* builder,
                                    bool* graph_is_destroyed) {
@@ -318,8 +340,9 @@ class DelegateKernel {
                          "Initialized OpenCL-based API.");
     return absl::OkStatus();
   }
+#endif // TFLITE_GPU_CL
 
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
   absl::Status InitializeOpenGlApi(GraphFloat32* graph,
                                    std::unique_ptr<InferenceBuilder>* builder) {
     gl::InferenceEnvironmentOptions env_options;
@@ -339,14 +362,41 @@ class DelegateKernel {
                          "Initialized OpenGL-based API.");
     return absl::OkStatus();
   }
-#endif
+#endif // TFLITE_GPU_GL
+
+#ifdef TFLITE_GPU_DML
+  absl::Status InitializeDirectMLApi(GraphFloat32* graph,
+                                   std::unique_ptr<InferenceBuilder>* builder) {
+    dml::InferenceEnvironmentOptions env_options;
+    dml::InferenceEnvironmentProperties properties;
+    RETURN_IF_ERROR(
+        NewInferenceEnvironment(env_options, &dml_environment_, &properties));
+    auto delegate_options = delegate_->options();
+    dml::InferenceOptions options;
+    options.usage = ToUsage(delegate_options.inference_preference);
+    options.priority1 = ToPriority(delegate_options.inference_priority1);
+    options.priority2 = ToPriority(delegate_options.inference_priority2);
+    options.priority3 = ToPriority(delegate_options.inference_priority3);
+    RETURN_IF_ERROR(dml_environment_->NewInferenceBuilder(
+        options, std::move(*graph), builder));
+
+    TFLITE_LOG_PROD_ONCE(tflite::TFLITE_LOG_INFO,
+                         "Initialized DirectML-based API.");
+    return absl::OkStatus();
+  }
+#endif // TFLITE_GPU_DML
 
   // The Delegate instance that's shared across all DelegateKernel instances.
   Delegate* const delegate_;  // doesn't own the memory.
+#ifdef TFLITE_GPU_CL
   std::unique_ptr<cl::InferenceEnvironment> cl_environment_;
-#ifndef TFLITE_GPU_CL_ONLY
+#endif // TFLITE_GPU_CL
+#ifdef TFLITE_GPU_GL
   std::unique_ptr<gl::InferenceEnvironment> gl_environment_;
-#endif
+#endif // TFLITE_GPU_GL
+#ifdef TFLITE_GPU_DML
+  std::unique_ptr<dml::InferenceEnvironment> dml_environment_;
+#endif // TFLITE_GPU_DML
   std::unique_ptr<InferenceRunner> runner_;
   std::vector<int64_t> input_indices_;
   std::vector<int64_t> output_indices_;

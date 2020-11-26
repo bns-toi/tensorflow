@@ -26,8 +26,12 @@ config_setting(
     },
 )
 
-TFLITE_GPU_DEFAULT_COPTS = if_windows([
-    "-DTFLITE_GPU_CL_ONLY"
+TFLITE_GPU_CL_DEFAULT_COPTS = if_windows([
+    "-DTFLITE_GPU_CL"
+])
+
+TFLITE_GPU_DML_DEFAULT_COPTS = if_windows([
+    "-DTFLITE_GPU_DML"
 ])
 
 cc_library(
@@ -194,6 +198,28 @@ cc_binary(
     deps = [":cl_delegate"],
 )
 
+cc_binary(
+    name = "tensorflowlite_gpu_dml",
+    linkopts = [
+        "-Wl,-soname=tensorflowlite_gpu_dml",
+    ] + select({
+        "//tensorflow:android": [
+            "-fvisibility=hidden",
+        ],
+        "//tensorflow:windows": [],
+        "//conditions:default": [
+            "-fvisibility=hidden",
+        ],
+    }),
+    linkshared = 1,
+    linkstatic = 1,
+    tags = [
+        "nobuilder",
+        "notap",
+    ],
+    deps = [":dml_delegate"],
+)
+
 # bazel build -c opt --cpu ios_arm64 --copt -Os --copt -DTFLITE_GPU_BINARY_RELEASE --copt -fvisibility=hidden --linkopt -s --strip always --cxxopt=-std=c++14 :libtensorflowlite_gpu_metal --apple_platform_type=ios
 ios_static_framework(
     name = "tensorflow_lite_gpu_framework",
@@ -241,7 +267,7 @@ cc_library(
     name = "cl_api",
     srcs = ["api.cc"],
     hdrs = ["api.h"],
-    copts = TFLITE_GPU_DEFAULT_COPTS,
+    copts = TFLITE_GPU_CL_DEFAULT_COPTS,
     deps = [
         "//tensorflow/lite/delegates/gpu/common:data_type",
         "//tensorflow/lite/delegates/gpu/common:status",
@@ -250,6 +276,20 @@ cc_library(
         "@com_google_absl//absl/types:variant",
         "@opencl_headers",
         "@vulkan_headers//:vulkan_headers_no_prototypes",
+    ],
+)
+
+cc_library(
+    name = "dml_api",
+    srcs = ["api.cc"],
+    hdrs = ["api.h"],
+    copts = TFLITE_GPU_DML_DEFAULT_COPTS,
+    deps = [
+        "//tensorflow/lite/delegates/gpu/common:data_type",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common:util",
+        "@com_google_absl//absl/types:span",
+        "@com_google_absl//absl/types:variant",
     ],
 )
 
@@ -266,7 +306,7 @@ cc_library(
 cc_library(
     name = "cl_spi",
     hdrs = ["spi.h"],
-    copts = TFLITE_GPU_DEFAULT_COPTS,
+    copts = TFLITE_GPU_CL_DEFAULT_COPTS,
     deps = [
         ":cl_api",
         "//tensorflow/lite/delegates/gpu/common:access_type",
@@ -317,7 +357,7 @@ cc_library(
         "//tensorflow:android": [],
         "//conditions:default": [],
     }),
-    copts = TFLITE_GPU_DEFAULT_COPTS,
+    copts = TFLITE_GPU_CL_DEFAULT_COPTS,
     deps = [
         "//tensorflow/lite:kernel_api",
         "//tensorflow/lite:minimal_logging",
@@ -326,6 +366,32 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/cl:cl_api",
         "//tensorflow/lite/delegates/gpu/cl:opencl_wrapper",
         "//tensorflow/lite/delegates/gpu/cl:cl_tensor_type_util",
+        "//tensorflow/lite/delegates/gpu/common:model",
+        "//tensorflow/lite/delegates/gpu/common:model_builder",
+        "//tensorflow/lite/delegates/gpu/common:model_transformer",
+        "//tensorflow/lite/delegates/gpu/common:quantization_util",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/kernels/internal:optimized_base",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/types:span",
+    ],
+)
+
+cc_library(
+    name = "dml_delegate",
+    srcs = ["delegate.cc"],
+    hdrs = ["delegate.h"],
+    linkopts = select({
+        "//tensorflow:android": [],
+        "//conditions:default": [],
+    }),
+    copts = TFLITE_GPU_DML_DEFAULT_COPTS,
+    deps = [
+        "//tensorflow/lite:kernel_api",
+        "//tensorflow/lite:minimal_logging",
+        "//tensorflow/lite/c:common",
+        "//tensorflow/lite/delegates/gpu:dml_api",
+        "//tensorflow/lite/delegates/gpu/dml:api",
         "//tensorflow/lite/delegates/gpu/common:model",
         "//tensorflow/lite/delegates/gpu/common:model_builder",
         "//tensorflow/lite/delegates/gpu/common:model_transformer",

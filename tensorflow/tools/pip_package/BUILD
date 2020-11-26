@@ -3,6 +3,7 @@
 
 load("//tensorflow:tensorflow.bzl", "filegroup_as_file", "if_windows", "transitive_hdrs")
 load("//third_party/mkl:build_defs.bzl", "if_mkl", "if_mkl_ml")
+load("//third_party/dml:build_defs.bzl", "if_dml")
 load("@local_config_cuda//cuda:build_defs.bzl", "if_cuda")
 load("@local_config_syslibs//:build_defs.bzl", "if_not_system_lib")
 load("//tensorflow/core/platform:build_config_root.bzl", "tf_additional_license_deps")
@@ -293,7 +294,8 @@ sh_binary(
            select({
                "//tensorflow:dynamic_loaded_kernels": DYNAMIC_LOADED_KERNELS,
                "//conditions:default": [],
-           }) + if_mkl_ml(["//third_party/mkl:intel_binary_blob"]),
+           }) + if_mkl_ml(["//third_party/mkl:intel_binary_blob"])
+           + if_dml(["@dml_redist//:pip_files"]),
 )
 
 # A genrule for generating a marker file for the pip package on Windows

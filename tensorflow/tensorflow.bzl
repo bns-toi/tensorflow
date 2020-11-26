@@ -54,6 +54,10 @@ load(
     "//third_party/ngraph:build_defs.bzl",
     "if_ngraph",
 )
+load(
+    "//third_party/dml:build_defs.bzl",
+    "if_dml",
+)
 
 # version for the shared libraries, can
 # not contain rc or alpha, only numbers.
@@ -335,6 +339,7 @@ def tf_copts(
         ]) +
         if_enable_mkl(["-DENABLE_MKL"]) +
         if_ngraph(["-DINTEL_NGRAPH=1"]) +
+        if_dml(["-DTENSORFLOW_USE_DIRECTML"]) +
         if_android_arm(["-mfpu=neon"]) +
         if_linux_x86_64(["-msse3"]) +
         if_ios_x86_64(["-msse4.1"]) +
@@ -2083,7 +2088,7 @@ def pywrap_tensorflow_macro(
             "-Wno-sign-compare",
             "-Wno-write-strings",
         ]),
-        linkopts = extra_linkopts,
+        linkopts = extra_linkopts + if_dml(["-Wl,-L/usr/lib/wsl/lib"]),
         linkstatic = 1,
         deps = deps + extra_deps,
         **kwargs

@@ -21,39 +21,47 @@ namespace {
 
 struct ObjectTypeGetter {
   ObjectType operator()(absl::monostate) const { return ObjectType::UNKNOWN; }
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
   ObjectType operator()(OpenGlBuffer) const { return ObjectType::OPENGL_SSBO; }
   ObjectType operator()(OpenGlTexture) const {
     return ObjectType::OPENGL_TEXTURE;
   }
-#endif
+#endif // TFLITE_GPU_GL
+#ifdef TFLITE_GPU_CL
   ObjectType operator()(OpenClBuffer) const {
     return ObjectType::OPENCL_BUFFER;
   }
   ObjectType operator()(OpenClTexture) const {
     return ObjectType::OPENCL_TEXTURE;
   }
+#endif // TFLITE_GPU_CL
+#ifdef TFLITE_GPU_VK
   ObjectType operator()(VulkanBuffer) const {
     return ObjectType::VULKAN_BUFFER;
   }
   ObjectType operator()(VulkanTexture) const {
     return ObjectType::VULKAN_TEXTURE;
   }
+#endif // TFLITE_GPU_VK
   ObjectType operator()(CpuMemory) const { return ObjectType::CPU_MEMORY; }
 };
 
 struct ObjectValidityChecker {
   bool operator()(absl::monostate) const { return false; }
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
   bool operator()(OpenGlBuffer obj) const { return obj.id != GL_INVALID_INDEX; }
   bool operator()(OpenGlTexture obj) const {
     return obj.id != GL_INVALID_INDEX && obj.format != GL_INVALID_ENUM;
   }
-#endif
+#endif // TFLITE_GPU_GL
+#ifdef TFLITE_GPU_CL
   bool operator()(OpenClBuffer obj) const { return obj.memobj; }
   bool operator()(OpenClTexture obj) const { return obj.memobj; }
+#endif // TFLITE_GPU_CL
+#ifdef TFLITE_GPU_VK
   bool operator()(VulkanBuffer obj) const { return obj.memory; }
   bool operator()(VulkanTexture obj) const { return obj.memory; }
+#endif // TFLITE_GPU_VK
   bool operator()(CpuMemory obj) const {
     return obj.data != nullptr && obj.size_bytes > 0 &&
            (data_type == DataType::UNKNOWN ||
@@ -85,20 +93,24 @@ bool IsObjectPresent(ObjectType type, const TensorObject& obj) {
   switch (type) {
     case ObjectType::CPU_MEMORY:
       return absl::holds_alternative<CpuMemory>(obj);
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
     case ObjectType::OPENGL_SSBO:
       return absl::holds_alternative<OpenGlBuffer>(obj);
     case ObjectType::OPENGL_TEXTURE:
       return absl::holds_alternative<OpenGlTexture>(obj);
-#endif
+#endif // TFLITE_GPU_GL
+#ifdef TFLITE_GPU_CL
     case ObjectType::OPENCL_BUFFER:
       return absl::holds_alternative<OpenClBuffer>(obj);
     case ObjectType::OPENCL_TEXTURE:
       return absl::holds_alternative<OpenClTexture>(obj);
+#endif // TFLITE_GPU_CL
+#ifdef TFLITE_GPU_VK
     case ObjectType::VULKAN_BUFFER:
       return absl::holds_alternative<VulkanBuffer>(obj);
     case ObjectType::VULKAN_TEXTURE:
       return absl::holds_alternative<VulkanTexture>(obj);
+#endif // TFLITE_GPU_VK
     case ObjectType::UNKNOWN:
       return false;
   }

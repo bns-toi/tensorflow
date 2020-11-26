@@ -42,6 +42,7 @@ load("//third_party/ruy:workspace.bzl", ruy = "repo")
 load("//third_party/sobol_data:workspace.bzl", sobol_data = "repo")
 load("//third_party/vulkan_headers:workspace.bzl", vulkan_headers = "repo")
 load("//third_party/toolchains/remote_config:configs.bzl", "initialize_rbe_configs")
+load("//third_party/dml/redist:workspace.bzl", "dml_repository")
 
 def initialize_third_party():
     """ Load third party repositories.  See above load() statements. """
@@ -110,6 +111,17 @@ def tf_repositories(path_prefix = "", tf_repo_name = ""):
     # For windows bazel build
     # TODO: Remove def file filter when TensorFlow can export symbols properly on Windows.
     def_file_filter_configure(name = "local_config_def_file_filter")
+
+    dml_repository(
+        name = "dml_redist",
+        #package = "DirectML",
+        package = "Microsoft.AI.DirectML",
+        #version = "1.5.0-dev1",
+        version = "1.4.0",
+        #source = "https://pkgs.dev.azure.com/ms/DirectML/_packaging/tensorflow-directml/nuget/v3/index.json",
+        source = "https://api.nuget.org/v3/index.json",
+        build_file = "//third_party/dml/redist:BUILD.bazel",
+    )
 
     # Point //external/local_config_arm_compiler to //external/arm_compiler
     arm_compiler_configure(

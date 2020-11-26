@@ -16,6 +16,12 @@ limitations under the License.
 #ifndef TENSORFLOW_LITE_DELEGATES_GPU_API_H_
 #define TENSORFLOW_LITE_DELEGATES_GPU_API_H_
 
+#if !defined(TFLITE_GPU_CL) && !defined(TFLITE_GPU_DML)
+	#define TFLITE_GPU_CL	// OpenCL
+	#define TFLITE_GPU_GL	// OpenGL
+	#define TFLITE_GPU_VK	// Vulkan
+#endif // !defined(TFLITE_GPU_CL) && !defined(TFLITE_GPU_DML)
+
 // Usage example:
 //
 //   // Builder is created from a model using GPU-specific parameters.
@@ -39,14 +45,18 @@ limitations under the License.
 
 #include "absl/types/span.h"
 #include "absl/types/variant.h"
+#ifdef TFLITE_GPU_CL
 #include <CL/cl.h>
+#endif // TFLITE_GPU_CL
 #include "tensorflow/lite/delegates/gpu/common/data_type.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
 #include "tensorflow/lite/delegates/gpu/common/util.h"
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
 #include "tensorflow/lite/delegates/gpu/gl/portable_gl31.h"
 #endif
+#ifdef TFLITE_GPU_VK
 #include <vulkan/vulkan.h>
+#endif // TFLITE_GPU_VK
 
 namespace tflite {
 namespace gpu {
@@ -68,18 +78,22 @@ enum class DataLayout {
 
 enum class ObjectType {
   UNKNOWN,
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
   OPENGL_SSBO,
   OPENGL_TEXTURE,
-#endif
+#endif // TFLITE_GPU_GL
   CPU_MEMORY,
+#ifdef TFLITE_GPU_CL
   OPENCL_TEXTURE,
   OPENCL_BUFFER,
+#endif // TFLITE_GPU_CL
+#ifdef TFLITE_GPU_VK
   VULKAN_BUFFER,
   VULKAN_TEXTURE
+#endif // TFLITE_GPU_VK
 };
 
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
 struct OpenGlBuffer {
   OpenGlBuffer() = default;
   explicit OpenGlBuffer(GLuint new_id) : id(new_id) {}
@@ -95,8 +109,9 @@ struct OpenGlTexture {
   GLuint id = GL_INVALID_INDEX;
   GLenum format = GL_INVALID_ENUM;
 };
-#endif
+#endif // TFLITE_GPU_GL
 
+#ifdef TFLITE_GPU_CL
 struct OpenClBuffer {
   OpenClBuffer() = default;
   explicit OpenClBuffer(cl_mem new_memobj) : memobj(new_memobj) {}
@@ -111,7 +126,9 @@ struct OpenClTexture {
   cl_mem memobj = nullptr;
   // TODO(akulik): should it specify texture format?
 };
+#endif // TFLITE_GPU_CL
 
+#ifdef TFLITE_GPU_VK
 struct VulkanBuffer {
   VulkanBuffer() = default;
   explicit VulkanBuffer(VkBuffer buffer_, VkDeviceSize size_,
@@ -144,6 +161,7 @@ struct VulkanMemory {
   VkDeviceSize size;
   VkDeviceSize offset;
 };
+#endif // TFLITE_GPU_VK
 
 struct CpuMemory {
   CpuMemory() = default;
@@ -231,11 +249,17 @@ uint32_t NumElements(const TensorObjectDef& def);
 
 using TensorObject =
     absl::variant<absl::monostate
-#ifndef TFLITE_GPU_CL_ONLY
+#ifdef TFLITE_GPU_GL
                   , OpenGlBuffer, OpenGlTexture
-#endif
+#endif // TFLITE_GPU_GL
                   , CpuMemory
-                  , OpenClBuffer, OpenClTexture, VulkanBuffer, VulkanTexture>;
+#ifdef TFLITE_GPU_CL
+                  , OpenClBuffer, OpenClTexture
+#endif // TFLITE_GPU_CL
+#ifdef TFLITE_GPU_VK
+                  , VulkanBuffer, VulkanTexture
+#endif // TFLITE_GPU_VK
+                 >;
 
 // @return true if object is set and corresponding values are defined.
 bool IsValid(const TensorObjectDef& def, const TensorObject& object);

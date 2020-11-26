@@ -107,6 +107,43 @@ function is_windows() {
   fi
 }
 
+function copy_dml_redist_files() {
+  # Dirs under ${TMPDIR} starting with _solib_ are special: setup.py will include any files under those dirs in package_data.
+  dml_redist_dir=${TMPDIR}/_solib_directml
+  mkdir -p ${dml_redist_dir}
+
+  if is_windows; then
+    runfiles_manifest_path=bazel-bin/tensorflow/tools/pip_package/build_pip_package.exe.runfiles_manifest
+  else
+    runfiles_manifest_path=bazel-bin/tensorflow/tools/pip_package/build_pip_package.runfiles_manifest
+  fi
+
+  # Locate path to DirectMLConfig.h in the runfiles manifest
+  dml_config_path=$(awk '/^dml_redist\/.*\/DirectMLConfig\.h/ {print $2}' $runfiles_manifest_path)
+  if [ -z "$dml_config_path" ]; then
+    echo "Could not find DirectMLConfig.h in runfiles"
+    exit 1
+  fi
+
+  # Locate path to root of DirectML redist files
+  dml_redist_root=$(echo $dml_config_path | sed 's/\/include\/DirectMLConfig\.h//')
+
+  # Copy library and licenses
+  if is_windows; then
+    dml_version=$(awk '/^#define DIRECTML_SOURCE_VERSION "([abcdef0-9]+)"/ { gsub("\"","",$3); print $3 }' $dml_config_path)
+    echo "DML Version = '$dml_version'"
+    dml_dll=$(find "${dml_redist_root}/bin/x64-win/" -type f -name "*.dll" ! -name "DirectML.Debug.*.dll")
+    cp "$dml_dll" "${dml_redist_dir}"/DirectML${dml_version}.dll
+  else
+    dml_version=$(awk -v RS='\r\n' '/^#define DIRECTML_SOURCE_VERSION "([abcdef0-9]+)"/ { gsub("\"","",$3); print $3 }' $dml_config_path)
+    echo "DML Version = '$dml_version'"
+    dml_so=$(find "$dml_redist_root/bin/x64-linux/" -type f)
+    cp "$dml_so" "${dml_redist_dir}"/libdirectml.so.${dml_version}
+  fi
+  cp "${dml_redist_root}/LICENSE.txt" ${dml_redist_dir}
+  cp "${dml_redist_root}/ThirdPartyNotices.txt" ${dml_redist_dir}
+}
+
 function prepare_src() {
   if [ $# -lt 1 ] ; then
     echo "No destination dir provided"
@@ -124,6 +161,8 @@ function prepare_src() {
     echo "Could not find bazel-bin.  Did you run from the root of the build tree?"
     exit 1
   fi
+
+  copy_dml_redist_files
 
   if is_windows; then
     rm -rf ./bazel-bin/tensorflow/tools/pip_package/simple_console_for_window_unzip
