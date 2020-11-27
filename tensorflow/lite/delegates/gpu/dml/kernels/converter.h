@@ -24,10 +24,8 @@ namespace tflite {
 namespace gpu {
 namespace dml {
 
-// Supports conversions from BHWC to internal OpenCL tensor representation and
-// back. Also supports F16/F32.
-//std::unique_ptr<TensorObjectConverterBuilder> NewConverterBuilder(
-//    Environment* environment);
+std::unique_ptr<TensorObjectConverterBuilder> NewConverterBuilder(
+    Environment* environment);
 
 }  // namespace dml
 }  // namespace gpu

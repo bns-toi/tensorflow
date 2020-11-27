@@ -81,16 +81,20 @@ enum class ObjectType {
 #ifdef TFLITE_GPU_GL
   OPENGL_SSBO,
   OPENGL_TEXTURE,
-#endif // TFLITE_GPU_GL
+#endif  // TFLITE_GPU_GL
   CPU_MEMORY,
 #ifdef TFLITE_GPU_CL
   OPENCL_TEXTURE,
   OPENCL_BUFFER,
-#endif // TFLITE_GPU_CL
+#endif  // TFLITE_GPU_CL
 #ifdef TFLITE_GPU_VK
   VULKAN_BUFFER,
   VULKAN_TEXTURE
-#endif // TFLITE_GPU_VK
+#endif  // TFLITE_GPU_VK
+#ifdef TFLITE_GPU_DML
+  DIRECTML_BUFFER,
+  DIRECTML_TEXTURE,
+#endif  // TFLITE_GPU_DML
 };
 
 #ifdef TFLITE_GPU_GL
@@ -109,7 +113,7 @@ struct OpenGlTexture {
   GLuint id = GL_INVALID_INDEX;
   GLenum format = GL_INVALID_ENUM;
 };
-#endif // TFLITE_GPU_GL
+#endif  // TFLITE_GPU_GL
 
 #ifdef TFLITE_GPU_CL
 struct OpenClBuffer {
@@ -126,7 +130,7 @@ struct OpenClTexture {
   cl_mem memobj = nullptr;
   // TODO(akulik): should it specify texture format?
 };
-#endif // TFLITE_GPU_CL
+#endif  // TFLITE_GPU_CL
 
 #ifdef TFLITE_GPU_VK
 struct VulkanBuffer {
@@ -161,7 +165,21 @@ struct VulkanMemory {
   VkDeviceSize size;
   VkDeviceSize offset;
 };
-#endif // TFLITE_GPU_VK
+#endif  // TFLITE_GPU_VK
+
+#ifdef TFLITE_GPU_DML
+struct DirectMlBuffer {
+  DirectMlBuffer() = default;
+
+  void* memory;
+};
+
+struct DirectMlTexture {
+  DirectMlTexture() = default;
+
+  void* memory;
+};
+#endif // TFLITE_GPU_DML
 
 struct CpuMemory {
   CpuMemory() = default;
@@ -259,6 +277,9 @@ using TensorObject =
 #ifdef TFLITE_GPU_VK
                   , VulkanBuffer, VulkanTexture
 #endif // TFLITE_GPU_VK
+#ifdef TFLITE_GPU_DML
+                  , DirectMlBuffer, DirectMlTexture
+#endif // TFLITE_GPU_DML
                  >;
 
 // @return true if object is set and corresponding values are defined.

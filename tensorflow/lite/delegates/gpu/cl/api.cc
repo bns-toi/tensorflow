@@ -24,21 +24,16 @@ limitations under the License.
 
 #include "absl/memory/memory.h"
 #include "absl/types/span.h"
-#ifdef TFLITE_GPU_CL
 #include "tensorflow/lite/delegates/gpu/cl/cl_command_queue.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_errors.h"
 #include "tensorflow/lite/delegates/gpu/cl/cl_event.h"
-#endif // TFLITE_GPU_CL
 #ifdef TFLITE_GPU_GL
 #include "tensorflow/lite/delegates/gpu/cl/egl_sync.h"
 #endif // TFLITE_GPU_GL
-#ifdef TFLITE_GPU_CL
 #include "tensorflow/lite/delegates/gpu/cl/environment.h"
-#endif // TFLITE_GPU_CL
 #ifdef TFLITE_GPU_GL
 #include "tensorflow/lite/delegates/gpu/cl/gl_interop.h"
 #endif // TFLITE_GPU_GL
-#ifdef TFLITE_GPU_CL
 #include "tensorflow/lite/delegates/gpu/cl/inference_context.h"
 #include "tensorflow/lite/delegates/gpu/cl/kernels/converter.h"
 #include "tensorflow/lite/delegates/gpu/cl/opencl_wrapper.h"
@@ -46,7 +41,6 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/cl/tensor.h"
 #include "tensorflow/lite/delegates/gpu/cl/tensor_type.h"
 #include "tensorflow/lite/delegates/gpu/cl/tensor_type_util.h"
-#endif // TFLITE_GPU_CL
 #include "tensorflow/lite/delegates/gpu/common/data_type.h"
 #include "tensorflow/lite/delegates/gpu/common/shape.h"
 #include "tensorflow/lite/delegates/gpu/common/tensor.h"

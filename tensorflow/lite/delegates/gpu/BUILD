@@ -315,6 +315,17 @@ cc_library(
 )
 
 cc_library(
+    name = "dml_spi",
+    hdrs = ["spi.h"],
+    copts = TFLITE_GPU_DML_DEFAULT_COPTS,
+    deps = [
+        ":dml_api",
+        "//tensorflow/lite/delegates/gpu/common:access_type",
+        "//tensorflow/lite/delegates/gpu/common:status",
+    ],
+)
+
+cc_library(
     name = "delegate",
     srcs = ["delegate.cc"],
     hdrs = ["delegate.h"],

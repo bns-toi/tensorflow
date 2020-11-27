@@ -30,7 +30,7 @@ cc_library(
         #":tensor_type",
         #":cl_tensor_type_util",
         "//tensorflow/lite/delegates/gpu:dml_api",
-        #"//tensorflow/lite/delegates/gpu/cl/kernels:cl_converter",
+        "//tensorflow/lite/delegates/gpu/dml/kernels:converter",
         "//tensorflow/lite/delegates/gpu/common:data_type",
         "//tensorflow/lite/delegates/gpu/common:model",
         "//tensorflow/lite/delegates/gpu/common:shape",

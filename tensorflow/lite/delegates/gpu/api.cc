@@ -43,6 +43,14 @@ struct ObjectTypeGetter {
     return ObjectType::VULKAN_TEXTURE;
   }
 #endif // TFLITE_GPU_VK
+#ifdef TFLITE_GPU_DML
+  ObjectType operator()(DirectMlBuffer) const {
+    return ObjectType::DIRECTML_BUFFER;
+  }
+  ObjectType operator()(DirectMlTexture) const {
+    return ObjectType::DIRECTML_TEXTURE;
+  }
+#endif // TFLITE_GPU_DML
   ObjectType operator()(CpuMemory) const { return ObjectType::CPU_MEMORY; }
 };
 
@@ -62,6 +70,10 @@ struct ObjectValidityChecker {
   bool operator()(VulkanBuffer obj) const { return obj.memory; }
   bool operator()(VulkanTexture obj) const { return obj.memory; }
 #endif // TFLITE_GPU_VK
+#ifdef TFLITE_GPU_DML
+  bool operator()(DirectMlBuffer obj) const { return obj.memory; }
+  bool operator()(DirectMlTexture obj) const { return obj.memory; }
+#endif // TFLITE_GPU_DML
   bool operator()(CpuMemory obj) const {
     return obj.data != nullptr && obj.size_bytes > 0 &&
            (data_type == DataType::UNKNOWN ||
@@ -111,6 +123,12 @@ bool IsObjectPresent(ObjectType type, const TensorObject& obj) {
     case ObjectType::VULKAN_TEXTURE:
       return absl::holds_alternative<VulkanTexture>(obj);
 #endif // TFLITE_GPU_VK
+#ifdef TFLITE_GPU_DML
+    case ObjectType::DIRECTML_BUFFER:
+      return absl::holds_alternative<DirectMlBuffer>(obj);
+    case ObjectType::DIRECTML_TEXTURE:
+      return absl::holds_alternative<DirectMlTexture>(obj);
+#endif // TFLITE_GPU_DML
     case ObjectType::UNKNOWN:
       return false;
   }
