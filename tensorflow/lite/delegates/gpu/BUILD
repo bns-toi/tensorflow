@@ -290,6 +290,7 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common:util",
         "@com_google_absl//absl/types:span",
         "@com_google_absl//absl/types:variant",
+        "@dml_redist//:headers",
     ],
 )
 

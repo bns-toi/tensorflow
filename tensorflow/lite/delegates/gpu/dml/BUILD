@@ -29,6 +29,7 @@ cc_library(
         #":tensor",
         #":tensor_type",
         #":cl_tensor_type_util",
+        ":runtime",
         "//tensorflow/lite/delegates/gpu:dml_api",
         "//tensorflow/lite/delegates/gpu/dml/kernels:converter",
         "//tensorflow/lite/delegates/gpu/common:data_type",
@@ -81,5 +82,17 @@ cc_library(
         "//tensorflow/lite/delegates/gpu/common:shape",
         "//tensorflow/lite/delegates/gpu/common:status",
         "//tensorflow/lite/delegates/gpu/common:tensor",
+    ],
+)
+
+cc_library(
+    name = "runtime",
+    srcs = ["runtime.cc"],
+    hdrs = ["runtime.h"],
+    deps = [
+    	"//tensorflow/lite/delegates/gpu/common:model",
+    	"//tensorflow/lite/delegates/gpu/common:types",
+    	"@com_google_absl//absl/memory",
+        "@dml_redist//:headers",
     ],
 )

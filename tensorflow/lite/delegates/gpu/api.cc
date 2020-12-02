@@ -71,8 +71,8 @@ struct ObjectValidityChecker {
   bool operator()(VulkanTexture obj) const { return obj.memory; }
 #endif // TFLITE_GPU_VK
 #ifdef TFLITE_GPU_DML
-  bool operator()(DirectMlBuffer obj) const { return obj.memory; }
-  bool operator()(DirectMlTexture obj) const { return obj.memory; }
+  bool operator()(DirectMlBuffer obj) const { return obj.resource.Get(); }
+  bool operator()(DirectMlTexture obj) const { return obj.resource.Get(); }
 #endif // TFLITE_GPU_DML
   bool operator()(CpuMemory obj) const {
     return obj.data != nullptr && obj.size_bytes > 0 &&

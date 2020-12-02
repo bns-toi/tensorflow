@@ -57,6 +57,9 @@ limitations under the License.
 #ifdef TFLITE_GPU_VK
 #include <vulkan/vulkan.h>
 #endif // TFLITE_GPU_VK
+#ifdef TFLITE_GPU_DML
+#include "tensorflow/lite/delegates/gpu/dml/dml_common.h"
+#endif  // TFLITE_GPU_DML
 
 namespace tflite {
 namespace gpu {
@@ -170,14 +173,18 @@ struct VulkanMemory {
 #ifdef TFLITE_GPU_DML
 struct DirectMlBuffer {
   DirectMlBuffer() = default;
+  explicit DirectMlBuffer(Microsoft::WRL::ComPtr<ID3D12Resource>& resource_)
+      : resource(resource_) {}
 
-  void* memory;
+  Microsoft::WRL::ComPtr<ID3D12Resource> resource;
 };
 
 struct DirectMlTexture {
   DirectMlTexture() = default;
+  explicit DirectMlTexture(Microsoft::WRL::ComPtr<ID3D12Resource>& resource_)
+      : resource(resource_) {}
 
-  void* memory;
+  Microsoft::WRL::ComPtr<ID3D12Resource> resource;
 };
 #endif // TFLITE_GPU_DML
 

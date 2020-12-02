@@ -20,17 +20,54 @@ limitations under the License.
 
 #include "absl/memory/memory.h"
 #include "absl/types/span.h"
-#include "tensorflow/lite/delegates/gpu/dml/dml_device.h"
-#include "tensorflow/lite/delegates/gpu/dml/environment.h"
-#include "tensorflow/lite/delegates/gpu/dml/kernels/converter.h"
 #include "tensorflow/lite/delegates/gpu/common/data_type.h"
 #include "tensorflow/lite/delegates/gpu/common/shape.h"
 #include "tensorflow/lite/delegates/gpu/common/tensor.h"
+#include "tensorflow/lite/delegates/gpu/dml/dml_device.h"
+#include "tensorflow/lite/delegates/gpu/dml/environment.h"
+#include "tensorflow/lite/delegates/gpu/dml/runtime.h"
+#include "tensorflow/lite/delegates/gpu/dml/kernels/converter.h"
+
+using Microsoft::WRL::ComPtr;
 
 namespace tflite {
 namespace gpu {
 namespace dml {
 namespace {
+
+absl::Status MaybeAllocateD3D12Resource(DMLDevice* device, const TensorObjectDef& def, ComPtr<ID3D12Resource>& resource) {
+  if (def.object_def.object_type != gpu::ObjectType::DIRECTML_BUFFER) {
+    return absl::InvalidArgumentError("Tensor object is not DirectML Buffer");
+  }
+
+  auto& dims = def.dimensions;
+  UINT tensor_sizes[4] = {dims.b, dims.h, dims.w, dims.c};
+  ::dml::TensorDesc::Dimensions dimensions(std::begin(tensor_sizes), std::end(tensor_sizes));
+  ::dml::TensorDesc desc;
+  switch (def.object_def.data_type) {
+    case DataType::FLOAT32:
+      desc = ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, dimensions);
+      break;
+    case DataType::FLOAT16:
+      desc = ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT16, dimensions);
+      break;
+    default:
+      return absl::InternalError(
+          "Unable to create new GL SSBO. Unsupported data type.");
+  };
+
+  UINT64 tensor_buffer_size = desc.totalTensorSizeInBytes;
+
+  DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
+    &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+    D3D12_HEAP_FLAG_NONE,
+    &CD3DX12_RESOURCE_DESC::Buffer(tensor_buffer_size, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
+     D3D12_RESOURCE_STATE_COPY_DEST,
+     nullptr,
+     IID_PPV_ARGS(&resource)));
+
+  return absl::OkStatus();
+}
 
 // Does one-step conversion between internal and external objects.
 // It may also allocate external objects if requested.
@@ -52,13 +89,39 @@ class DefaultTensorTie : public TensorTie {
 
   static absl::Status New(const TensorTieDef& def,
                           TensorObjectConverterBuilder* converter_builder,
-//                          TensorObject internal_object,
                           Environment* env, std::unique_ptr<TensorTie>* tie) {
-//    auto tie_impl = absl::make_unique<DefaultTensorTie>(def, internal_object);
-//    RETURN_IF_ERROR(tie_impl->Init(converter_builder, env));
-//    *tie = std::move(tie_impl);
+    auto tie_impl = absl::make_unique<DefaultTensorTie>(def, TensorObject{});
+    RETURN_IF_ERROR(tie_impl->Init(converter_builder, env));
+    *tie = std::move(tie_impl);
     return absl::OkStatus();
   }
+
+  absl::Status CopyToExternalObject() final {
+    if (!converter_to_) {
+      return absl::UnavailableError("Conversion is not available");
+    }
+    return converter_to_->Convert(internal_obj_, GetExternalObject());
+  }
+
+  absl::Status CopyFromExternalObject() final {
+    if (!converter_from_) {
+      return absl::UnavailableError("Conversion is not available");
+    }
+    return converter_from_->Convert(GetExternalObject(), internal_obj_);
+  }
+
+  absl::Status SetExternalObject(TensorObject obj) final {
+    if (!def().external_def.object_def.user_provided) {
+      return absl::InvalidArgumentError("External object is read-only");
+    }
+    if (!IsValid(def().external_def, obj)) {
+      return absl::InvalidArgumentError("Given object is not valid");
+    }
+    external_obj_ = obj;
+    return absl::OkStatus();
+  }
+
+  TensorObject GetExternalObject() final { return external_obj_; }
 
  private:
   absl::Status Init(TensorObjectConverterBuilder* converter_builder,
@@ -86,9 +149,9 @@ class DefaultTensorTie : public TensorTie {
         break;
       }
       case ObjectType::DIRECTML_BUFFER: {
-        auto& dims = d.dimensions;
-        const BHWC shape(dims.b, dims.h, dims.w, dims.c);
-        // TODO
+        ComPtr<ID3D12Resource> resource;
+        RETURN_IF_ERROR(MaybeAllocateD3D12Resource(env->GetDevicePtr(), d, resource));
+        external_obj_ = DirectMlBuffer{resource};
         break;
       }
       default:
@@ -122,10 +185,28 @@ class TwoStepTensorTie : public TensorTie {
   static absl::Status New(const TensorTieDef& def,
                           TensorObjectConverterBuilder* converter_builder,
                           Environment* env, std::unique_ptr<TensorTie>* tie) {
-//    auto tie_impl = absl::make_unique<TwoStepTensorTie>(def);
-//    RETURN_IF_ERROR(tie_impl->Init(internal_object, converter_builder, env));
-//    *tie = std::move(tie_impl);
+    auto tie_impl = absl::make_unique<TwoStepTensorTie>(def);
+    RETURN_IF_ERROR(tie_impl->Init(converter_builder, env));
+    *tie = std::move(tie_impl);
     return absl::OkStatus();
+  }
+
+  absl::Status CopyToExternalObject() final {
+    RETURN_IF_ERROR(inner_tie_->CopyToExternalObject());
+    return outer_tie_->CopyToExternalObject();
+  }
+
+  absl::Status CopyFromExternalObject() final {
+    RETURN_IF_ERROR(outer_tie_->CopyFromExternalObject());
+    return inner_tie_->CopyFromExternalObject();
+  }
+
+  absl::Status SetExternalObject(TensorObject obj) final {
+    return outer_tie_->SetExternalObject(obj);
+  }
+
+  TensorObject GetExternalObject() final {
+    return outer_tie_->GetExternalObject();
   }
 
  private:
@@ -142,6 +223,15 @@ class TwoStepTensorTie : public TensorTie {
     inner_def.external_def.object_def.user_provided = false;
     inner_def.internal_def = def.internal_def;
     return std::make_pair(outer_def, inner_def);
+  }
+
+  absl::Status Init(TensorObjectConverterBuilder* converter_builder,
+                    Environment* env) {
+    auto defs = MakeOuterInnerDefs(def());
+    RETURN_IF_ERROR(DefaultTensorTie::New(defs.second,
+                                          converter_builder, env, &inner_tie_));
+    return DefaultTensorTie::New(defs.first,
+                                 converter_builder, env, &outer_tie_);
   }
 
   std::unique_ptr<TensorTie> inner_tie_;
@@ -180,8 +270,9 @@ class TensorTieFactory {
 
 class InferenceRunnerImpl : public InferenceRunner {
  public:
-  InferenceRunnerImpl(Environment* environment)
-    {}
+  InferenceRunnerImpl(Environment* environment,
+                      std::unique_ptr<Runtime> runtime)
+      : runtime_(std::move(runtime)) {}
 
   absl::Status Initialize(const std::vector<TensorTieDef>& inputs,
                           const std::vector<TensorTieDef>& outputs,
@@ -229,6 +320,14 @@ class InferenceRunnerImpl : public InferenceRunner {
   }
 
   absl::Status Run() override {
+    for (auto& obj : inputs_) {
+      RETURN_IF_ERROR(obj->CopyFromExternalObject());
+    }
+//    RETURN_IF_ERROR(context_->AddToQueue(queue_));
+//    clFlush(queue_->queue());
+    for (auto& obj : outputs_) {
+      RETURN_IF_ERROR(obj->CopyToExternalObject());
+    }
     return absl::OkStatus();
   }
 
@@ -255,23 +354,24 @@ class InferenceRunnerImpl : public InferenceRunner {
     return defs;
   }
 
+  std::unique_ptr<Runtime> runtime_;
   std::vector<std::unique_ptr<TensorTie>> inputs_;
   std::vector<std::unique_ptr<TensorTie>> outputs_;
 };
 
 class InferenceBuilderImpl : public InferenceBuilder {
  public:
-  explicit InferenceBuilderImpl(Environment* environment)
-      : environment_(environment) {}
+  explicit InferenceBuilderImpl(Environment* environment, GraphFloat32 graph)
+      : environment_(environment),
+        graph_(std::move(graph)) {}
 
   absl::Status Initialize(const InferenceOptions& options,
-                          const InferenceEnvironmentOptions& env_options,
-                          const GraphFloat32& graph) {
+                          const InferenceEnvironmentOptions& env_options) {
     
     tie_factory_ = absl::make_unique<TensorTieFactory>(environment_);
 
-    inputs_ = LinkTensors(graph, graph.inputs());
-    outputs_ = LinkTensors(graph, graph.outputs());
+    inputs_ = LinkTensors(graph_.inputs());
+    outputs_ = LinkTensors(graph_.outputs());
     return absl::OkStatus();
   }
 
@@ -319,7 +419,10 @@ class InferenceBuilderImpl : public InferenceBuilder {
   }
 
   absl::Status Build(std::unique_ptr<InferenceRunner>* runner) override {
-    auto runner_impl = absl::make_unique<InferenceRunnerImpl>(environment_);
+    auto runtime =
+        absl::make_unique<Runtime>();
+    auto runner_impl = absl::make_unique<InferenceRunnerImpl>(
+        environment_, std::move(runtime));
     RETURN_IF_ERROR(
         runner_impl->Initialize(inputs_, outputs_, tie_factory_.get()));
     *runner = std::move(runner_impl);
@@ -328,8 +431,7 @@ class InferenceBuilderImpl : public InferenceBuilder {
 
  private:
   // Links internal tensors with external user-facing objects.
-  std::vector<TensorTieDef> LinkTensors(const GraphFloat32& graph,
-                                        const std::vector<Value*>& values) {
+  std::vector<TensorTieDef> LinkTensors(const std::vector<Value*>& values) {
     std::vector<TensorTieDef> links;
     links.reserve(values.size());
     for (const auto& value : values) {
@@ -344,7 +446,7 @@ class InferenceBuilderImpl : public InferenceBuilder {
       external_def.object_def.user_provided = true;
       internal_def.object_def.user_provided = false;
       AccessType access =
-          graph.IsGraphInput(value->id) ? AccessType::READ : AccessType::WRITE;
+          graph_.IsGraphInput(value->id) ? AccessType::READ : AccessType::WRITE;
       links.push_back({value->id, access, internal_def, external_def});
     }
     return links;
@@ -361,6 +463,7 @@ class InferenceBuilderImpl : public InferenceBuilder {
   }
 
   Environment* environment_;
+  GraphFloat32 graph_;
 
   std::vector<TensorTieDef> inputs_;
   std::vector<TensorTieDef> outputs_;
@@ -401,9 +504,10 @@ class InferenceEnvironmentImpl : public InferenceEnvironment {
     }
 #endif
 
-    auto builder_impl = absl::make_unique<InferenceBuilderImpl>(&environment_);
+    auto builder_impl = absl::make_unique<InferenceBuilderImpl>(
+        &environment_, std::move(model));
     RETURN_IF_ERROR(
-        builder_impl->Initialize(resolved_options, options_, model));
+        builder_impl->Initialize(resolved_options, options_));
     *builder = std::move(builder_impl);
     return absl::OkStatus();
   }

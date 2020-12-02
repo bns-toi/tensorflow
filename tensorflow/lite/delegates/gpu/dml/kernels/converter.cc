@@ -123,12 +123,12 @@ class CpuCopier : public DirectMllConverterImpl {
     if (cpu_input) {
       auto buffer_output = absl::get_if<DirectMlBuffer>(&output_obj);
       if (buffer_output) {
-
+          // TODO
       }
     } else if (cpu_output) {
       auto buffer_input = absl::get_if<DirectMlBuffer>(&input_obj);
       if (buffer_input) {
-
+        // TODO
       }
     }
     return absl::InternalError("Unexpected object");
