@@ -13,30 +13,39 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_LITE_DELEGATES_GPU_DML_RUNTIME_H_
-#define TENSORFLOW_LITE_DELEGATES_GPU_DML_RUNTIME_H_
+#ifndef TENSORFLOW_LITE_DELEGATES_GPU_DML_OBJECT_MANAGER_H_
+#define TENSORFLOW_LITE_DELEGATES_GPU_DML_OBJECT_MANAGER_H_
 
-#include <vector>
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "tensorflow/lite/delegates/gpu/common/model.h"
-#include "tensorflow/lite/delegates/gpu/dml/environment.h"
-#include "tensorflow/lite/delegates/gpu/dml/object_manager.h"
+#include "tensorflow/lite/delegates/gpu/common/status.h"
+#include "tensorflow/lite/delegates/gpu/dml/d3d_resource.h"
+#include "tensorflow/lite/delegates/gpu/gl/stats.h"
 
 namespace tflite {
 namespace gpu {
 namespace dml {
-class Runtime {
+class ObjectManager {
  public:
-  Runtime(const ObjectManager* external_objects);
+  // Moves ownership over the given resource to the manager.
+  absl::Status RegisterResource(uint32_t id, D3DResource resource);
 
-  absl::Status Compile(Environment* environment, const GraphFloat32& graph);
+  void RemoveResource(uint32_t id);
+
+  // Return a permanent pointer to a resource for the given id or nullptr.
+  D3DResource* FindResource(uint32_t id) const;
 
  private:
-  const ObjectManager* external_objects_;
+  std::vector<std::unique_ptr<D3DResource>> resources_;
 };
+
 }  // namespace dml
 }  // namespace gpu
 }  // namespace tflite
 
-#endif  // TENSORFLOW_LITE_DELEGATES_GPU_DML_RUNTIME_H_
+#endif  // TENSORFLOW_LITE_DELEGATES_GPU_DML_OBJECT_MANAGER_H_

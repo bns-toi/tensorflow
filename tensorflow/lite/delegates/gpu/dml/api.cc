@@ -27,6 +27,7 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/dml/environment.h"
 #include "tensorflow/lite/delegates/gpu/dml/runtime.h"
 #include "tensorflow/lite/delegates/gpu/dml/kernels/converter.h"
+#include "tensorflow/lite/delegates/gpu/dml/object_manager.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -35,9 +36,12 @@ namespace gpu {
 namespace dml {
 namespace {
 
-absl::Status MaybeAllocateD3D12Resource(DMLDevice* device, const TensorObjectDef& def, ComPtr<ID3D12Resource>& resource) {
-  if (def.object_def.object_type != gpu::ObjectType::DIRECTML_BUFFER) {
-    return absl::InvalidArgumentError("Tensor object is not DirectML Buffer");
+absl::Status MaybeAllocateD3D12Resource(DMLDevice* device,
+                                        const TensorObjectDef& def,
+                                        AccessType access_type,
+                                        D3DResource* resource) {
+  if (def.object_def.object_type != gpu::ObjectType::DIRECTML_RESOURCE) {
+    return absl::InvalidArgumentError("Tensor object is not D3D Resource");
   }
 
   auto& dims = def.dimensions;
@@ -48,40 +52,32 @@ absl::Status MaybeAllocateD3D12Resource(DMLDevice* device, const TensorObjectDef
     case DataType::FLOAT32:
       desc = ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, dimensions);
       break;
-    case DataType::FLOAT16:
-      desc = ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT16, dimensions);
-      break;
+//    case DataType::FLOAT16:
+//      desc = ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT16, dimensions);
+//      break;
     default:
       return absl::InternalError(
-          "Unable to create new GL SSBO. Unsupported data type.");
+          "Unable to create new D3D Resource. Unsupported data type.");
   };
 
   UINT64 tensor_buffer_size = desc.totalTensorSizeInBytes;
 
-  DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
-    &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-    D3D12_HEAP_FLAG_NONE,
-    &CD3DX12_RESOURCE_DESC::Buffer(tensor_buffer_size, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
-     D3D12_RESOURCE_STATE_COPY_DEST,
-     nullptr,
-     IID_PPV_ARGS(&resource)));
-
-  return absl::OkStatus();
+  return CreateResource(device, access_type, tensor_buffer_size, resource);
 }
 
 // Does one-step conversion between internal and external objects.
 // It may also allocate external objects if requested.
 class DefaultTensorTie : public TensorTie {
  public:
-  DefaultTensorTie(const TensorTieDef& def, TensorObject internal_obj)
-      : TensorTie(def), internal_obj_(internal_obj) {}
+  DefaultTensorTie(const TensorTieDef& def, TensorObject internal_obj,
+                   ObjectManager* objects)
+      : TensorTie(def), objects_(objects), internal_obj_(internal_obj) {}
 
   static bool IsSupported(
       const TensorTieDef& def,
       const TensorObjectConverterBuilder& converter_builder) {
     auto object_type = def.external_def.object_def.object_type;
-    return (object_type == ObjectType::DIRECTML_BUFFER ||
-            object_type == ObjectType::DIRECTML_TEXTURE ||
+    return (object_type == ObjectType::DIRECTML_RESOURCE ||
             object_type == ObjectType::CPU_MEMORY) &&
            converter_builder.IsSupported(def.internal_def, def.external_def) &&
            converter_builder.IsSupported(def.external_def, def.internal_def);
@@ -89,8 +85,25 @@ class DefaultTensorTie : public TensorTie {
 
   static absl::Status New(const TensorTieDef& def,
                           TensorObjectConverterBuilder* converter_builder,
+                          ObjectManager* objects,
                           Environment* env, std::unique_ptr<TensorTie>* tie) {
-    auto tie_impl = absl::make_unique<DefaultTensorTie>(def, TensorObject{});
+    auto tie_impl =
+        absl::make_unique<DefaultTensorTie>(def, TensorObject{}, objects);
+    RETURN_IF_ERROR(tie_impl->Init(converter_builder, env));
+    *tie = std::move(tie_impl);
+    return absl::OkStatus();
+  }
+
+  static absl::Status New(const TensorTieDef& def,
+                          TensorObjectConverterBuilder* converter_builder,
+                          TensorObject internal_object, Environment* env,
+                          std::unique_ptr<TensorTie>* tie) {
+    if (!IsValid(def.internal_def, internal_object)) {
+      return absl::InternalError("Internal object does not match definition.");
+    }
+
+    auto tie_impl =
+        absl::make_unique<DefaultTensorTie>(def, internal_object, nullptr);
     RETURN_IF_ERROR(tie_impl->Init(converter_builder, env));
     *tie = std::move(tie_impl);
     return absl::OkStatus();
@@ -124,18 +137,82 @@ class DefaultTensorTie : public TensorTie {
   TensorObject GetExternalObject() final { return external_obj_; }
 
  private:
+  bool IsSameDef() const {
+    const auto& external_def = def().external_def.object_def;
+    const auto& internal_def = def().internal_def.object_def;
+    return (external_def.object_type == internal_def.object_type &&
+            external_def.data_type == internal_def.data_type &&
+            external_def.data_layout == internal_def.data_layout) ||
+           // Check for equivalent layouts that have the same size.
+           (external_def.object_type == internal_def.object_type &&
+            external_def.data_type == internal_def.data_type &&
+            external_def.data_layout == DataLayout::BHWC &&
+            internal_def.data_layout == DataLayout::DHWC4 &&
+            def().external_def.dimensions.c == 4);
+  }
+
   absl::Status Init(TensorObjectConverterBuilder* converter_builder,
                     Environment* env) {
+    // First check is an object is user provided.
+    const auto& external_def = def().external_def.object_def;
 
-    RETURN_IF_ERROR(converter_builder->MakeConverter(
-        def().external_def, def().internal_def, &converter_from_));
-    RETURN_IF_ERROR(converter_builder->MakeConverter(
-        def().internal_def, def().external_def, &converter_to_));
+    const bool is_same_def = IsSameDef();
 
-    return MaybeAllocateExternalObject(env);
+    if (!is_same_def) {
+      RETURN_IF_ERROR(converter_builder->MakeConverter(
+          def().external_def, def().internal_def, &converter_from_));
+      RETURN_IF_ERROR(converter_builder->MakeConverter(
+          def().internal_def, def().external_def, &converter_to_));
+    }
+
+    if (external_def.user_provided) {
+      if (is_same_def) {
+        return absl::OkStatus();
+      }
+      // Object is provided by a user, but runtime expects different object
+      // type. Therefore, we have to allocate internal object and convert.
+      return MaybeAllocateInternalObject(env);
+    } else {
+      RETURN_IF_ERROR(MaybeAllocateInternalObject(env));
+
+      if (is_same_def) {
+        // Object is NOT provided by a user, but it matches definition expected
+        // by runtime. Conversion is not needed.
+        external_obj_ = internal_obj_;
+        return absl::OkStatus();
+      }
+
+      // Object is NOT provided by a user.
+      return MaybeAllocateExternalObject(env);
+    }
+    return absl::OkStatus();
+  }
+
+  absl::Status MaybeAllocateInternalObject(Environment* env) {
+    const TensorObjectDef& d = def().internal_def;
+    if (d.object_def.user_provided) {
+      return absl::OkStatus();
+    }
+    switch (d.object_def.object_type) {
+      case gpu::ObjectType::DIRECTML_RESOURCE: {
+        D3DResource resource;
+        RETURN_IF_ERROR(MaybeAllocateD3D12Resource(env->GetDevicePtr(), d, def().access_type, &resource));
+        internal_obj_ = DirectMlResource{resource.Get()};
+        RETURN_IF_ERROR(
+            objects_->RegisterResource(def().id, std::move(resource)));
+        break;
+      }
+      // TODO(akulik): support textures as internal object when compiler permits
+      default:
+        return absl::InternalError("Unexpected object type");
+    }
+    return absl::OkStatus();
   }
 
   absl::Status MaybeAllocateExternalObject(Environment* env) {
+#if 1
+    return absl::InternalError("Unexpected object type");
+#else
     const TensorObjectDef& d = def().external_def;
     if (d.object_def.user_provided) {
       return absl::OkStatus();
@@ -148,21 +225,30 @@ class DefaultTensorTie : public TensorTie {
         external_obj_ = CpuMemory{cpu_memory_.data(), cpu_memory_.size()};
         break;
       }
-      case ObjectType::DIRECTML_BUFFER: {
-        ComPtr<ID3D12Resource> resource;
-        RETURN_IF_ERROR(MaybeAllocateD3D12Resource(env->GetDevicePtr(), d, resource));
-        external_obj_ = DirectMlBuffer{resource};
+      case ObjectType::DIRECTML_RESOURCE: {
+        RETURN_IF_ERROR(MaybeAllocateD3D12Resource(env->GetDevicePtr(), d,
+                                                   &external_resource_));
+        external_obj_ = DirectMlResource{external_resource_.Get()};
+//        D3DResource resource;
         break;
       }
       default:
         return absl::InternalError("Unexpected object type");
     }
     return absl::OkStatus();
+#endif
   }
 
-  const TensorObject internal_obj_;
+  ObjectManager* objects_;
+
+  // hold references to objects.
+  TensorObject internal_obj_;
   TensorObject external_obj_;
+
+  // Hold actual objects.
+  D3DResource external_resource_;
   std::vector<uint8_t> cpu_memory_;
+
   std::unique_ptr<TensorObjectConverter> converter_to_;
   std::unique_ptr<TensorObjectConverter> converter_from_;
 };
@@ -184,9 +270,10 @@ class TwoStepTensorTie : public TensorTie {
 
   static absl::Status New(const TensorTieDef& def,
                           TensorObjectConverterBuilder* converter_builder,
-                          Environment* env, std::unique_ptr<TensorTie>* tie) {
+                          ObjectManager* objects, Environment* env,
+                          std::unique_ptr<TensorTie>* tie) {
     auto tie_impl = absl::make_unique<TwoStepTensorTie>(def);
-    RETURN_IF_ERROR(tie_impl->Init(converter_builder, env));
+    RETURN_IF_ERROR(tie_impl->Init(converter_builder, objects, env));
     *tie = std::move(tie_impl);
     return absl::OkStatus();
   }
@@ -215,23 +302,34 @@ class TwoStepTensorTie : public TensorTie {
     TensorTieDef outer_def;
     outer_def.external_def = def.external_def;
     outer_def.internal_def = def.external_def;
-    outer_def.internal_def.object_def.object_type = ObjectType::DIRECTML_BUFFER;
+    outer_def.internal_def.object_def.object_type =
+        ObjectType::DIRECTML_RESOURCE;
     outer_def.internal_def.object_def.user_provided = true;
 
     TensorTieDef inner_def;
+    inner_def.id = def.id;
+    // Should not allocate external object.
     inner_def.external_def = outer_def.internal_def;
     inner_def.external_def.object_def.user_provided = false;
-    inner_def.internal_def = def.internal_def;
+    // Reflects what is actually supported by compiler.
+    inner_def.internal_def.dimensions = inner_def.external_def.dimensions;
+    inner_def.internal_def.object_def.data_type = DataType::FLOAT32;
+    inner_def.internal_def.object_def.data_layout = DataLayout::DHWC4;
+    inner_def.internal_def.object_def.object_type =
+        ObjectType::DIRECTML_RESOURCE;
+    // It may allocate another internal object and should register it to
+    // ObjectManager.
+    inner_def.internal_def.object_def.user_provided = false;
     return std::make_pair(outer_def, inner_def);
   }
 
   absl::Status Init(TensorObjectConverterBuilder* converter_builder,
-                    Environment* env) {
+                    ObjectManager* objects, Environment* env) {
     auto defs = MakeOuterInnerDefs(def());
-    RETURN_IF_ERROR(DefaultTensorTie::New(defs.second,
-                                          converter_builder, env, &inner_tie_));
-    return DefaultTensorTie::New(defs.first,
-                                 converter_builder, env, &outer_tie_);
+    RETURN_IF_ERROR(DefaultTensorTie::New(defs.second, converter_builder,
+                                          objects, env, &inner_tie_));
+    return DefaultTensorTie::New(defs.first, converter_builder,
+                                 inner_tie_->GetExternalObject(), env, &outer_tie_);
   }
 
   std::unique_ptr<TensorTie> inner_tie_;
@@ -251,14 +349,14 @@ class TensorTieFactory {
             TwoStepTensorTie::IsSupported(def, *converter_builder_));
   }
   
-  absl::Status NewTensorTie(const TensorTieDef& def,
+  absl::Status NewTensorTie(const TensorTieDef& def, ObjectManager* objects,
                             std::unique_ptr<TensorTie>* tie) {
     auto converter = converter_builder_.get();
     if (DefaultTensorTie::IsSupported(def, *converter)) {
-      return DefaultTensorTie::New(def, converter, &env_, tie);
+      return DefaultTensorTie::New(def, converter, objects, & env_, tie);
     }
     if (TwoStepTensorTie::IsSupported(def, *converter)) {
-      return TwoStepTensorTie::New(def, converter, &env_, tie);
+      return TwoStepTensorTie::New(def, converter, objects, & env_, tie);
     }
     return absl::UnimplementedError("Unsupported tensor tie definition.");
   }
@@ -271,8 +369,9 @@ class TensorTieFactory {
 class InferenceRunnerImpl : public InferenceRunner {
  public:
   InferenceRunnerImpl(Environment* environment,
-                      std::unique_ptr<Runtime> runtime)
-      : runtime_(std::move(runtime)) {}
+                      std::unique_ptr<Runtime> runtime,
+                      std::unique_ptr<ObjectManager> objects)
+      : runtime_(std::move(runtime)), objects_(std::move(objects)) {}
 
   absl::Status Initialize(const std::vector<TensorTieDef>& inputs,
                           const std::vector<TensorTieDef>& outputs,
@@ -332,13 +431,13 @@ class InferenceRunnerImpl : public InferenceRunner {
   }
 
  private:
-  static absl::Status LinkTensors(
+  absl::Status LinkTensors(
       const std::vector<TensorTieDef>& defs, TensorTieFactory* factory,
       std::vector<std::unique_ptr<TensorTie>>* objects) {
     objects->reserve(defs.size());
     for (auto& def : defs) {
       std::unique_ptr<TensorTie> object;
-      RETURN_IF_ERROR(factory->NewTensorTie(def, &object));
+      RETURN_IF_ERROR(factory->NewTensorTie(def, objects_.get(), &object));
       objects->push_back(std::move(object));
     }
     return absl::OkStatus();
@@ -355,6 +454,7 @@ class InferenceRunnerImpl : public InferenceRunner {
   }
 
   std::unique_ptr<Runtime> runtime_;
+  std::unique_ptr<ObjectManager> objects_;
   std::vector<std::unique_ptr<TensorTie>> inputs_;
   std::vector<std::unique_ptr<TensorTie>> outputs_;
 };
@@ -419,12 +519,16 @@ class InferenceBuilderImpl : public InferenceBuilder {
   }
 
   absl::Status Build(std::unique_ptr<InferenceRunner>* runner) override {
-    auto runtime =
-        absl::make_unique<Runtime>();
+    auto external_objects = absl::make_unique<ObjectManager>();
+    auto runtime = absl::make_unique<Runtime>(external_objects.get());
+    Runtime* runtime_ptr = runtime.get();
     auto runner_impl = absl::make_unique<InferenceRunnerImpl>(
-        environment_, std::move(runtime));
+        environment_, std::move(runtime), std::move(external_objects));
     RETURN_IF_ERROR(
         runner_impl->Initialize(inputs_, outputs_, tie_factory_.get()));
+
+    RETURN_IF_ERROR(runtime_ptr->Compile(environment_, graph_));
+
     *runner = std::move(runner_impl);
     return absl::OkStatus();
   }
@@ -436,12 +540,19 @@ class InferenceBuilderImpl : public InferenceBuilder {
     links.reserve(values.size());
     for (const auto& value : values) {
       TensorObjectDef external_def;
+      // So far the compiler always forces inputs and outputs to be in the fixed
+      // format.
       const auto& shape = value->tensor.shape;
       external_def.dimensions = Dimensions(shape.b, shape.h, shape.w, shape.c);
       external_def.object_def.data_type = DataType::FLOAT32;
       external_def.object_def.data_layout = DataLayout::DHWC4;
-      external_def.object_def.object_type = gpu::ObjectType::DIRECTML_BUFFER;
+      external_def.object_def.object_type = gpu::ObjectType::DIRECTML_RESOURCE;
 
+      // Internal object is not expected to be provided by user because: if
+      // external and internal objects have same defs, the external object is
+      // propagated and just used as an internal one; otherwise, if they have
+      // different defs, internal object will be created, because it is not
+      // provided by user.
       TensorObjectDef internal_def = external_def;
       external_def.object_def.user_provided = true;
       internal_def.object_def.user_provided = false;

@@ -95,8 +95,7 @@ enum class ObjectType {
   VULKAN_TEXTURE
 #endif  // TFLITE_GPU_VK
 #ifdef TFLITE_GPU_DML
-  DIRECTML_BUFFER,
-  DIRECTML_TEXTURE,
+  DIRECTML_RESOURCE,
 #endif  // TFLITE_GPU_DML
 };
 
@@ -171,20 +170,12 @@ struct VulkanMemory {
 #endif  // TFLITE_GPU_VK
 
 #ifdef TFLITE_GPU_DML
-struct DirectMlBuffer {
-  DirectMlBuffer() = default;
-  explicit DirectMlBuffer(Microsoft::WRL::ComPtr<ID3D12Resource>& resource_)
+struct DirectMlResource {
+  DirectMlResource() = default;
+  explicit DirectMlResource(ID3D12Resource* resource_)
       : resource(resource_) {}
 
-  Microsoft::WRL::ComPtr<ID3D12Resource> resource;
-};
-
-struct DirectMlTexture {
-  DirectMlTexture() = default;
-  explicit DirectMlTexture(Microsoft::WRL::ComPtr<ID3D12Resource>& resource_)
-      : resource(resource_) {}
-
-  Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+  ID3D12Resource* resource;
 };
 #endif // TFLITE_GPU_DML
 
@@ -285,7 +276,7 @@ using TensorObject =
                   , VulkanBuffer, VulkanTexture
 #endif // TFLITE_GPU_VK
 #ifdef TFLITE_GPU_DML
-                  , DirectMlBuffer, DirectMlTexture
+                  , DirectMlResource
 #endif // TFLITE_GPU_DML
                  >;
 

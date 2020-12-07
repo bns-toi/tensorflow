@@ -13,30 +13,35 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef TENSORFLOW_LITE_DELEGATES_GPU_DML_RUNTIME_H_
-#define TENSORFLOW_LITE_DELEGATES_GPU_DML_RUNTIME_H_
-
-#include <vector>
-#include <memory>
-
-#include "tensorflow/lite/delegates/gpu/common/model.h"
-#include "tensorflow/lite/delegates/gpu/dml/environment.h"
 #include "tensorflow/lite/delegates/gpu/dml/object_manager.h"
+
+#include "absl/memory/memory.h"
+#include "absl/types/span.h"
+#include "tensorflow/lite/delegates/gpu/common/convert.h"
+#include "tensorflow/lite/delegates/gpu/common/status.h"
 
 namespace tflite {
 namespace gpu {
 namespace dml {
-class Runtime {
- public:
-  Runtime(const ObjectManager* external_objects);
 
-  absl::Status Compile(Environment* environment, const GraphFloat32& graph);
+absl::Status ObjectManager::RegisterResource(uint32_t id, D3DResource resource) {
+  if (id >= resources_.size()) {
+    resources_.resize(id + 1);
+  }
+  resources_[id] = absl::make_unique<D3DResource>(std::move(resource));
+  return absl::OkStatus();
+}
 
- private:
-  const ObjectManager* external_objects_;
-};
+void ObjectManager::RemoveResource(uint32_t id) {
+  if (id < resources_.size()) {
+    resources_[id].reset(nullptr);
+  }
+}
+
+D3DResource* ObjectManager::FindResource(uint32_t id) const {
+  return id >= resources_.size() ? nullptr : resources_[id].get();
+}
+
 }  // namespace dml
 }  // namespace gpu
 }  // namespace tflite
-
-#endif  // TENSORFLOW_LITE_DELEGATES_GPU_DML_RUNTIME_H_

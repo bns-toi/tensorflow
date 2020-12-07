@@ -31,18 +31,28 @@ namespace dml {
 class DMLDevice {
  public:
   DMLDevice() = default;
-  DMLDevice(Microsoft::WRL::ComPtr<ID3D12Device>& device, Microsoft::WRL::ComPtr<ID3D12CommandQueue>& command_queue);
-  DMLDevice(ID3D12Device* device, ID3D12CommandQueue* command_queue);
+  DMLDevice(Microsoft::WRL::ComPtr<ID3D12Device>& device,
+            Microsoft::WRL::ComPtr<ID3D12CommandQueue>& command_queue,
+            Microsoft::WRL::ComPtr<ID3D12CommandAllocator>& command_allocator,
+            Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>& command_list);
+  DMLDevice(ID3D12Device* device, ID3D12CommandQueue* command_queue,
+            ID3D12CommandAllocator* command_allocator,
+            ID3D12GraphicsCommandList* command_list);
 
   ~DMLDevice() {}
 
   void Init();
+  void CloseExecuteResetWait();
 
   Microsoft::WRL::ComPtr<ID3D12Device> d3d_device_ptr;
   Microsoft::WRL::ComPtr<ID3D12CommandQueue> command_queue_ptr;
+  Microsoft::WRL::ComPtr<ID3D12CommandAllocator> command_allocator_ptr;
+  Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> command_list_ptr;
 
   ID3D12Device* d3d_device;
-  ID3D12CommandQueue* command_queue_;
+  ID3D12CommandQueue* command_queue;
+  ID3D12CommandAllocator* command_allocator;
+  ID3D12GraphicsCommandList* command_list;
 
   Microsoft::WRL::ComPtr<IDMLDevice> dml_device;
 };

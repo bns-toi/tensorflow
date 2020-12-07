@@ -20,15 +20,8 @@ cc_library(
     hdrs = ["api.h"],
     copts = TFLITE_GPU_DEFAULT_COPTS,
     deps = [
-        #":cl_command_queue",
-        #":cl_errors",
-        #":cl_event",
         ":environment",
-        #":inference_context",
-        #":precision",
-        #":tensor",
-        #":tensor_type",
-        #":cl_tensor_type_util",
+        ":object_manager",
         ":runtime",
         "//tensorflow/lite/delegates/gpu:dml_api",
         "//tensorflow/lite/delegates/gpu/dml/kernels:converter",
@@ -93,6 +86,35 @@ cc_library(
     	"//tensorflow/lite/delegates/gpu/common:model",
     	"//tensorflow/lite/delegates/gpu/common:types",
     	"@com_google_absl//absl/memory",
+        "//third_party/dml:dx_helpers",
         "@dml_redist//:headers",
+    ],
+)
+
+cc_library(
+    name = "d3d_resource",
+    srcs = ["d3d_resource.cc"],
+    hdrs = ["d3d_resource.h"],
+    deps = [
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common:types",
+        "@com_google_absl//absl/types:span",
+        "//third_party/dml:dx_helpers",
+        "@dml_redist//:headers",
+        "//third_party/dml:winadapter",
+    ],
+)
+
+cc_library(
+    name = "object_manager",
+    srcs = ["object_manager.cc"],
+    hdrs = ["object_manager.h"],
+    deps = [
+        ":d3d_resource",
+        "//tensorflow/lite/delegates/gpu/common:convert",
+        "//tensorflow/lite/delegates/gpu/common:model",
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "@com_google_absl//absl/memory",
+        "@com_google_absl//absl/types:span",
     ],
 )

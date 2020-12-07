@@ -28,14 +28,54 @@ namespace tflite {
 namespace gpu {
 namespace dml {
 
-DMLDevice::DMLDevice(Microsoft::WRL::ComPtr<ID3D12Device>& device, Microsoft::WRL::ComPtr<ID3D12CommandQueue>& command_queue)
-    : d3d_device_ptr(device),
-      command_queue_ptr(command_queue),
-      d3d_device(d3d_device_ptr.Get()),
-      command_queue_(command_queue_ptr.Get()) {}
+class UniqueHandle {
+ public:
+  explicit UniqueHandle(HANDLE handle) : m_handle(handle) {}
+  UniqueHandle(const UniqueHandle&) = delete;
+  UniqueHandle(UniqueHandle&& other) {
+    m_handle = std::move(other.m_handle);
+    other.m_handle = nullptr;
+  }
+  ~UniqueHandle() {
+    if (m_handle) {
+      CloseHandle(m_handle);
+      m_handle = nullptr;
+    }
+  }
+  UniqueHandle& operator=(UniqueHandle& other) = delete;
+  UniqueHandle& operator=(UniqueHandle&& other) {
+    m_handle = std::move(other.m_handle);
+    other.m_handle = nullptr;
+    return *this;
+  }
+  HANDLE get() { return m_handle; }
+  operator bool() const { return m_handle; }
 
-DMLDevice::DMLDevice(ID3D12Device* device, ID3D12CommandQueue* command_queue)
-    : d3d_device(device), command_queue_(command_queue) {}
+ private:
+  HANDLE m_handle = nullptr;
+};
+
+DMLDevice::DMLDevice(
+    Microsoft::WRL::ComPtr<ID3D12Device>& device,
+    Microsoft::WRL::ComPtr<ID3D12CommandQueue>& command_queue_,
+    Microsoft::WRL::ComPtr<ID3D12CommandAllocator>& command_allocator_,
+    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>& command_list_)
+    : d3d_device_ptr(device),
+      command_queue_ptr(command_queue_),
+      command_allocator_ptr(command_allocator_),
+      command_list_ptr(command_list_),
+      d3d_device(d3d_device_ptr.Get()),
+      command_queue(command_queue_ptr.Get()),
+      command_allocator(command_allocator_ptr.Get()),
+      command_list(command_list_ptr.Get()) {}
+
+DMLDevice::DMLDevice(ID3D12Device* device, ID3D12CommandQueue* command_queue_,
+                     ID3D12CommandAllocator* command_allocator_,
+                     ID3D12GraphicsCommandList* command_list_)
+    : d3d_device(device),
+      command_queue(command_queue_),
+      command_allocator(command_allocator_),
+      command_list(command_list_) {}
 
 void DMLDevice::Init() {
 
@@ -89,9 +129,39 @@ absl::Status CreateDefaultGPUDevice(DMLDevice* result) {
   DML_CHECK_SUCCEEDED(d3d_device->CreateCommandQueue(
       &command_queue_desc, IID_PPV_ARGS(&command_queue)));
 
+  ComPtr<ID3D12CommandAllocator> command_allocator;
+  DML_CHECK_SUCCEEDED(d3d_device->CreateCommandAllocator(
+      D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocator)));
+
+  ComPtr<ID3D12GraphicsCommandList> command_list;
+  DML_CHECK_SUCCEEDED(d3d_device->CreateCommandList(
+      0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocator.Get(), nullptr,
+      IID_PPV_ARGS(&command_list)));
+
   // construct
-  *result = DMLDevice(d3d_device, command_queue);
+  *result = DMLDevice(d3d_device, command_queue, command_allocator, command_list);
   return absl::OkStatus();
+}
+
+void DMLDevice::CloseExecuteResetWait() {
+  DML_CHECK_SUCCEEDED(command_list->Close());
+
+  ID3D12CommandList* command_lists[] = {command_list};
+  command_queue->ExecuteCommandLists(ARRAYSIZE(command_lists), command_lists);
+
+  DML_CHECK_SUCCEEDED(command_list->Reset(command_allocator, nullptr));
+
+  ComPtr<ID3D12Fence> fence;
+  DML_CHECK_SUCCEEDED(
+      d3d_device->CreateFence(
+      0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+
+  UniqueHandle fence_event_handle(CreateEvent(nullptr, TRUE, FALSE, nullptr));
+
+  DML_CHECK_SUCCEEDED(fence->SetEventOnCompletion(1, fence_event_handle.get()));
+
+  DML_CHECK_SUCCEEDED(command_queue->Signal(fence.Get(), 1));
+  ::WaitForSingleObjectEx(fence_event_handle.get(), INFINITE, FALSE);
 }
 
 }  // namespace dml

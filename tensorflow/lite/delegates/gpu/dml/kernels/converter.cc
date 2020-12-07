@@ -45,10 +45,10 @@ class FromTensorConverter : public DirectMllConverterImpl {
     return IsSupportedDataType(input.data_type) &&
            IsSupportedDataType(output.data_type) &&
            // Output is always BUFFER/BHWC
-           output.object_type == ObjectType::DIRECTML_BUFFER &&
+           output.object_type == ObjectType::DIRECTML_RESOURCE &&
            output.data_layout == DataLayout::BHWC &&
            // BUFFER/DHWC4 ->
-           input.object_type == ObjectType::DIRECTML_BUFFER &&
+           input.object_type == ObjectType::DIRECTML_RESOURCE &&
            input.data_layout == DataLayout::DHWC4;
   }
 
@@ -60,7 +60,7 @@ class FromTensorConverter : public DirectMllConverterImpl {
 
   absl::Status Convert(const TensorObject& input_obj,
                        const TensorObject& output_obj) override {
-    auto output = absl::get_if<DirectMlBuffer>(&output_obj);
+    auto output = absl::get_if<DirectMlResource>(&output_obj);
     if (!output/* || !output->memobj*/) {
       return absl::InvalidArgumentError(
           "Missing output in from_tensor converter");
@@ -74,11 +74,11 @@ class ToTensorConverter : public DirectMllConverterImpl {
   static bool IsSupported(const ObjectDef& input, const ObjectDef& output) {
     return IsSupportedDataType(input.data_type) &&
            IsSupportedDataType(output.data_type) &&
-           // Input is always BUFFER/BHWC
-           input.object_type == ObjectType::DIRECTML_BUFFER &&
+           // Input is always RESOURCE/BHWC
+           input.object_type == ObjectType::DIRECTML_RESOURCE &&
            input.data_layout == DataLayout::BHWC &&
-           // BUFFER/DHWC4 ->
-           output.object_type == ObjectType::DIRECTML_BUFFER &&
+           // RESOURCE/DHWC4 ->
+           output.object_type == ObjectType::DIRECTML_RESOURCE &&
            output.data_layout == DataLayout::DHWC4;
   }
 
@@ -90,7 +90,7 @@ class ToTensorConverter : public DirectMllConverterImpl {
 
   absl::Status Convert(const TensorObject& input_obj,
                        const TensorObject& output_obj) override {
-    auto input = absl::get_if<DirectMlBuffer>(&input_obj);
+    auto input = absl::get_if<DirectMlResource>(&input_obj);
     if (!input/* || !input->memobj*/) {
       return absl::InvalidArgumentError("Missing input in to_tensor converter");
     }
@@ -105,9 +105,9 @@ class CpuCopier : public DirectMllConverterImpl {
     return input.data_type == output.data_type &&
            input.data_layout == output.data_layout &&
            ((input.object_type == ObjectType::CPU_MEMORY &&
-             output.object_type == ObjectType::DIRECTML_BUFFER) ||
+             output.object_type == ObjectType::DIRECTML_RESOURCE) ||
             (output.object_type == ObjectType::CPU_MEMORY &&
-             input.object_type == ObjectType::DIRECTML_BUFFER));
+             input.object_type == ObjectType::DIRECTML_RESOURCE));
   }
 
   absl::Status Init(const TensorObjectDef& input_def,
@@ -121,12 +121,12 @@ class CpuCopier : public DirectMllConverterImpl {
     auto cpu_input = absl::get_if<CpuMemory>(&input_obj);
     auto cpu_output = absl::get_if<CpuMemory>(&output_obj);
     if (cpu_input) {
-      auto buffer_output = absl::get_if<DirectMlBuffer>(&output_obj);
+      auto buffer_output = absl::get_if<DirectMlResource>(&output_obj);
       if (buffer_output) {
           // TODO
       }
     } else if (cpu_output) {
-      auto buffer_input = absl::get_if<DirectMlBuffer>(&input_obj);
+      auto buffer_input = absl::get_if<DirectMlResource>(&input_obj);
       if (buffer_input) {
         // TODO
       }
