@@ -111,14 +111,14 @@ class DefaultTensorTie : public TensorTie {
 
   absl::Status CopyToExternalObject() final {
     if (!converter_to_) {
-      return absl::UnavailableError("Conversion is not available");
+      return absl::OkStatus();
     }
     return converter_to_->Convert(internal_obj_, GetExternalObject());
   }
 
   absl::Status CopyFromExternalObject() final {
     if (!converter_from_) {
-      return absl::UnavailableError("Conversion is not available");
+      return absl::OkStatus();
     }
     return converter_from_->Convert(GetExternalObject(), internal_obj_);
   }
@@ -371,7 +371,8 @@ class InferenceRunnerImpl : public InferenceRunner {
   InferenceRunnerImpl(Environment* environment,
                       std::unique_ptr<Runtime> runtime,
                       std::unique_ptr<ObjectManager> objects)
-      : runtime_(std::move(runtime)), objects_(std::move(objects)) {}
+      : environment_(environment), runtime_(std::move(runtime)),
+        objects_(std::move(objects)) {}
 
   absl::Status Initialize(const std::vector<TensorTieDef>& inputs,
                           const std::vector<TensorTieDef>& outputs,
@@ -422,8 +423,7 @@ class InferenceRunnerImpl : public InferenceRunner {
     for (auto& obj : inputs_) {
       RETURN_IF_ERROR(obj->CopyFromExternalObject());
     }
-//    RETURN_IF_ERROR(context_->AddToQueue(queue_));
-//    clFlush(queue_->queue());
+    RETURN_IF_ERROR(runtime_->Execute());
     for (auto& obj : outputs_) {
       RETURN_IF_ERROR(obj->CopyToExternalObject());
     }
@@ -453,6 +453,7 @@ class InferenceRunnerImpl : public InferenceRunner {
     return defs;
   }
 
+  Environment* environment_;
   std::unique_ptr<Runtime> runtime_;
   std::unique_ptr<ObjectManager> objects_;
   std::vector<std::unique_ptr<TensorTie>> inputs_;
@@ -520,14 +521,15 @@ class InferenceBuilderImpl : public InferenceBuilder {
 
   absl::Status Build(std::unique_ptr<InferenceRunner>* runner) override {
     auto external_objects = absl::make_unique<ObjectManager>();
-    auto runtime = absl::make_unique<Runtime>(external_objects.get());
+    auto runtime = absl::make_unique<Runtime>(
+        environment_->GetDevicePtr(), external_objects.get());
     Runtime* runtime_ptr = runtime.get();
     auto runner_impl = absl::make_unique<InferenceRunnerImpl>(
         environment_, std::move(runtime), std::move(external_objects));
     RETURN_IF_ERROR(
         runner_impl->Initialize(inputs_, outputs_, tie_factory_.get()));
 
-    RETURN_IF_ERROR(runtime_ptr->Compile(environment_, graph_));
+    RETURN_IF_ERROR(runtime_ptr->Compile(graph_));
 
     *runner = std::move(runner_impl);
     return absl::OkStatus();

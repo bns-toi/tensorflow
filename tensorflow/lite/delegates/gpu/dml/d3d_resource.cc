@@ -21,8 +21,71 @@ namespace tflite {
 namespace gpu {
 namespace dml {
 
+absl::Status GetResourceSize(ID3D12Resource* resource, int64_t* size_bytes) {
+  D3D12_RESOURCE_DESC desc = resource->GetDesc();
+  *size_bytes = desc.Width;
+  return absl::OkStatus();
+}
+
 D3DResource::~D3DResource() {
 
+}
+
+absl::Status D3DResource::ReadResource(DMLDevice* device, void* data) const {
+  ComPtr<ID3D12Resource> readback_buffer;
+  DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
+      &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK), D3D12_HEAP_FLAG_NONE,
+      &CD3DX12_RESOURCE_DESC::Buffer(bytes_size_),
+      D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback_buffer)));
+
+  device->command_list->ResourceBarrier(
+      1, &CD3DX12_RESOURCE_BARRIER::Transition(
+             resource_ptr, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+             D3D12_RESOURCE_STATE_COPY_SOURCE));
+
+  device->command_list->CopyResource(readback_buffer.Get(), resource_ptr);
+
+  device->CloseExecuteResetWait();
+
+  D3D12_RANGE buffer_range{0, static_cast<SIZE_T>(bytes_size_)};
+  FLOAT* buffer_data{};
+  DML_CHECK_SUCCEEDED(readback_buffer->Map(
+      0, &buffer_range, reinterpret_cast<void**>(&buffer_data)));
+
+  std::memcpy(data, buffer_data, bytes_size_);
+  
+  D3D12_RANGE empty_range{0, 0};
+  readback_buffer->Unmap(0, &empty_range);
+
+  return absl::OkStatus();
+}
+
+absl::Status D3DResource::WriteResource(DMLDevice* device, const void* data) {
+  ComPtr<ID3D12Resource> upload_buffer;
+  DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
+      &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
+      D3D12_HEAP_FLAG_NONE,
+      &CD3DX12_RESOURCE_DESC::Buffer(bytes_size_),
+      D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload_buffer)));
+
+  D3D12_SUBRESOURCE_DATA subresource_data{};
+  subresource_data.pData = data;
+  subresource_data.RowPitch = static_cast<LONG_PTR>(bytes_size_);
+  subresource_data.SlicePitch = subresource_data.RowPitch;
+
+  // Upload the input tensor to the GPU.
+  ::UpdateSubresources(device->command_list, resource_ptr,
+                       upload_buffer.Get(),
+                       0, 0, 1, &subresource_data);
+
+  device->command_list->ResourceBarrier(
+      1, &CD3DX12_RESOURCE_BARRIER::Transition(
+             resource_ptr, D3D12_RESOURCE_STATE_COPY_DEST,
+             D3D12_RESOURCE_STATE_UNORDERED_ACCESS));
+
+  device->CloseExecuteResetWait();
+
+  return absl::OkStatus();
 }
 
 absl::Status CreateResource(DMLDevice* device,
@@ -42,6 +105,7 @@ absl::Status CreateResource(DMLDevice* device,
   *d3d_resource = D3DResource(resource, size);
   return absl::OkStatus();
 }
+
 
 }  // namespace dml
 }  // namespace gpu

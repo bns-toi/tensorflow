@@ -28,12 +28,27 @@ namespace gpu {
 namespace dml {
 class Runtime {
  public:
-  Runtime(const ObjectManager* external_objects);
+  Runtime(DMLDevice* device, const ObjectManager* external_objects);
 
-  absl::Status Compile(Environment* environment, const GraphFloat32& graph);
+  absl::Status Compile(const GraphFloat32& graph);
+  absl::Status Execute();
 
  private:
+  DMLDevice* device;
   const ObjectManager* external_objects_;
+
+  Microsoft::WRL::ComPtr<IDMLCompiledOperator> compiled_operator;
+  Microsoft::WRL::ComPtr<IDMLOperatorInitializer> operator_initializer;
+  UINT descriptor_count;
+  Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptor_heap;
+  Microsoft::WRL::ComPtr<IDMLBindingTable> binding_table;
+  UINT64 temporary_resource_size;
+  UINT64 persistent_resource_size;
+  Microsoft::WRL::ComPtr<ID3D12Resource> temporary_buffer;
+  Microsoft::WRL::ComPtr<ID3D12Resource> persistent_buffer;
+  Microsoft::WRL::ComPtr<IDMLCommandRecorder> command_recorder;
+  std::vector<uint32_t> input_ids;
+  std::vector<uint32_t> output_ids;
 };
 }  // namespace dml
 }  // namespace gpu

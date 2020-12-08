@@ -20,11 +20,20 @@ limitations under the License.
 #include <string>
 
 #include "tensorflow/lite/delegates/gpu/common/util.h"
+#include "tensorflow/lite/delegates/gpu/dml/d3d_resource.h"
 
 namespace tflite {
 namespace gpu {
 namespace dml {
 namespace {
+
+absl::Status WrapResource(DirectMlResource resource,
+                          D3DResource* d3d_resource) {
+  int64_t size_bytes;
+  RETURN_IF_ERROR(GetResourceSize(resource.resource, &size_bytes));
+  *d3d_resource = D3DResource(resource.resource, size_bytes);
+  return absl::OkStatus();
+}
 
 class DirectMllConverterImpl : public TensorObjectConverter {
  public:
@@ -33,6 +42,7 @@ class DirectMllConverterImpl : public TensorObjectConverter {
                             Environment* environment) = 0;
 
  protected:
+  DMLDevice* device_ = nullptr;
 };
 
 bool IsSupportedDataType(DataType type) {
@@ -55,13 +65,14 @@ class FromTensorConverter : public DirectMllConverterImpl {
   absl::Status Init(const TensorObjectDef& input_def,
                     const TensorObjectDef& output_def,
                     Environment* environment) final {
-    return absl::OkStatus();
+    //return absl::OkStatus();
+    return absl::InvalidArgumentError("Missing input in from_tensor converter");
   }
 
   absl::Status Convert(const TensorObject& input_obj,
                        const TensorObject& output_obj) override {
     auto output = absl::get_if<DirectMlResource>(&output_obj);
-    if (!output/* || !output->memobj*/) {
+    if (!output || !output->resource) {
       return absl::InvalidArgumentError(
           "Missing output in from_tensor converter");
     }
@@ -85,13 +96,14 @@ class ToTensorConverter : public DirectMllConverterImpl {
   absl::Status Init(const TensorObjectDef& input_def,
                     const TensorObjectDef& output_def,
                     Environment* environment) final {
-    return absl::OkStatus();
+    //return absl::OkStatus();
+    return absl::InvalidArgumentError("Missing input in to_tensor converter");
   }
 
   absl::Status Convert(const TensorObject& input_obj,
                        const TensorObject& output_obj) override {
     auto input = absl::get_if<DirectMlResource>(&input_obj);
-    if (!input/* || !input->memobj*/) {
+    if (!input || !input->resource) {
       return absl::InvalidArgumentError("Missing input in to_tensor converter");
     }
     return absl::InvalidArgumentError("Missing input in to_tensor converter");
@@ -113,6 +125,7 @@ class CpuCopier : public DirectMllConverterImpl {
   absl::Status Init(const TensorObjectDef& input_def,
                     const TensorObjectDef& output_def,
                     Environment* environment) final {
+    device_ = environment->GetDevicePtr();
     return absl::OkStatus();
   }
 
@@ -121,14 +134,21 @@ class CpuCopier : public DirectMllConverterImpl {
     auto cpu_input = absl::get_if<CpuMemory>(&input_obj);
     auto cpu_output = absl::get_if<CpuMemory>(&output_obj);
     if (cpu_input) {
-      auto buffer_output = absl::get_if<DirectMlResource>(&output_obj);
-      if (buffer_output) {
-          // TODO
+      auto resource_output = absl::get_if<DirectMlResource>(&output_obj);
+      if (resource_output) {
+        D3DResource d3d_resource;
+        RETURN_IF_ERROR(WrapResource(*resource_output, &d3d_resource));
+        return d3d_resource.Write(device_,
+            absl::MakeConstSpan(static_cast<const uint8_t*>(cpu_input->data),
+                                cpu_input->size_bytes));
       }
     } else if (cpu_output) {
-      auto buffer_input = absl::get_if<DirectMlResource>(&input_obj);
-      if (buffer_input) {
-        // TODO
+      auto resource_input = absl::get_if<DirectMlResource>(&input_obj);
+      if (resource_input) {
+        D3DResource d3d_resource;
+        RETURN_IF_ERROR(WrapResource(*resource_input, &d3d_resource));
+        return d3d_resource.Read(device_, absl::MakeSpan(
+            static_cast<uint8_t*>(cpu_output->data), cpu_output->size_bytes));
       }
     }
     return absl::InternalError("Unexpected object");

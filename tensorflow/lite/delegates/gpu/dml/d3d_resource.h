@@ -33,22 +33,58 @@ namespace dml {
 class D3DResource {
  public:
   D3DResource() {}
-  D3DResource(Microsoft::WRL::ComPtr<ID3D12Resource>& resource, UINT64 size)
-      : resource_(resource), size_(size) {}
+  D3DResource(Microsoft::WRL::ComPtr<ID3D12Resource>& resource,
+              size_t bytes_size)
+      : resource_(resource), resource_ptr(resource_.Get()), bytes_size_(bytes_size) {}
+  D3DResource(ID3D12Resource* resource, size_t bytes_size)
+      : resource_ptr(resource), bytes_size_(bytes_size) {}
 
   ~D3DResource();
 
-  ID3D12Resource* Get() const { return resource_ .Get(); }
-  UINT64 size() const { return size_; }
+  // Reads data from buffer into CPU memory. Data should point to a region that
+  // has at least bytes_size available.
+  template <typename T>
+  absl::Status Read(DMLDevice* device, absl::Span<T> data) const;
+
+  // Writes data to a buffer.
+  template <typename T>
+  absl::Status Write(DMLDevice* device, absl::Span<const T> data);
+
+  ID3D12Resource* Get() const { return resource_ptr; }
+  size_t bytes_size() const { return bytes_size_; }
 
  private:
   Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
-  UINT64 size_;
+  ID3D12Resource* resource_ptr;
+  size_t bytes_size_;
+
+  absl::Status ReadResource(DMLDevice* device, void* data) const;
+  absl::Status WriteResource(DMLDevice* device, const void* data);
 };
+
+absl::Status GetResourceSize(ID3D12Resource* resource, int64_t* size_bytes);
 
 absl::Status CreateResource(DMLDevice* device,
                             AccessType access_type, UINT64 size,
                             D3DResource* d3d_resource);
+
+template <typename T>
+absl::Status D3DResource::Read(DMLDevice* device, absl::Span<T> data) const {
+  if (data.size() * sizeof(T) < bytes_size()) {
+    return absl::InvalidArgumentError(
+        "Read from buffer failed. Destination data is shorter than buffer.");
+  }
+  return ReadResource(device, data.data());
+}
+
+template <typename T>
+absl::Status D3DResource::Write(DMLDevice* device, absl::Span<const T> data) {
+  if (data.size() * sizeof(T) > bytes_size_) {
+    return absl::InvalidArgumentError(
+        "Write to buffer failed. Source data is larger than buffer.");
+  }
+  return WriteResource(device, data.data());
+}
 
 }  // namespace dml
 }  // namespace gpu

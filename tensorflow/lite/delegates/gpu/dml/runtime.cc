@@ -15,7 +15,6 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/common/operations.h"
 #include "tensorflow/lite/delegates/gpu/dml/runtime.h"
-#include "tensorflow/lite/delegates/gpu/dml/dml_common.h"
 
 using Microsoft::WRL::ComPtr;
 
@@ -96,16 +95,10 @@ int4 GetOffset(const SliceAttributes& attr, int src_width, int src_height,
 
 }  // namespace
 
-Runtime::Runtime(const ObjectManager* external_objects)
-    : external_objects_(external_objects) {}
+Runtime::Runtime(DMLDevice* device_, const ObjectManager* external_objects)
+    : device(device_), external_objects_(external_objects) {}
 
-absl::Status Runtime::Compile(Environment* environment,
-                            const GraphFloat32& graph) {
-
-  DMLDevice* device = environment->GetDevicePtr();
-
-  ComPtr<IDMLCompiledOperator> compiled_operator;
-
+absl::Status Runtime::Compile(const GraphFloat32& graph) {
   ::dml::Scope scope(device->dml_device.Get());
   std::map<ValueId, ::dml::Expression> expressions;
   ValueId last_output = 0;
@@ -118,7 +111,6 @@ absl::Status Runtime::Compile(Environment* environment,
   DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION;
   compiled_operator = scope.Compile(execution_flags, {output});
 
-  ComPtr<IDMLOperatorInitializer> operator_initializer;
   IDMLCompiledOperator* compiled_operators[] = {compiled_operator.Get()};
   DML_CHECK_SUCCEEDED(device->dml_device->CreateOperatorInitializer(
       ARRAYSIZE(compiled_operators), compiled_operators,
@@ -126,12 +118,9 @@ absl::Status Runtime::Compile(Environment* environment,
 
   DML_BINDING_PROPERTIES initialize_binding_properties = operator_initializer->GetBindingProperties();
   DML_BINDING_PROPERTIES execute_binding_properties = compiled_operator->GetBindingProperties();
-  UINT descriptor_count =
-      std::max(initialize_binding_properties.RequiredDescriptorCount, execute_binding_properties.RequiredDescriptorCount);
+  descriptor_count = std::max(initialize_binding_properties.RequiredDescriptorCount, execute_binding_properties.RequiredDescriptorCount);
 
   // Create descriptor heaps.
-  ComPtr<ID3D12DescriptorHeap> descriptor_heap;
-
   D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap_desc{};
   descriptor_heap_desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   descriptor_heap_desc.NumDescriptors = descriptor_count;
@@ -150,17 +139,15 @@ absl::Status Runtime::Compile(Environment* environment,
   binding_table_desc.GPUDescriptorHandle = descriptor_heap->GetGPUDescriptorHandleForHeapStart();
   binding_table_desc.SizeInDescriptors = descriptor_count;
 
-  ComPtr<IDMLBindingTable> binding_table;
   DML_CHECK_SUCCEEDED(device->dml_device->CreateBindingTable(
       &binding_table_desc, IID_PPV_ARGS(&binding_table)));
 
   // Create the temporary and persistent resources that are necessary for executing an operator.
-  UINT64 temporary_resource_size =
+  temporary_resource_size =
       std::max(initialize_binding_properties.TemporaryResourceSize, execute_binding_properties.TemporaryResourceSize);
-  UINT64 persistent_resource_size = execute_binding_properties.PersistentResourceSize;
+  persistent_resource_size = execute_binding_properties.PersistentResourceSize;
 
   // Bind and initialize the operator on the GPU.
-  ComPtr<ID3D12Resource> temporary_buffer;
   if (temporary_resource_size != 0) {
     DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
         &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE,
@@ -172,7 +159,6 @@ absl::Status Runtime::Compile(Environment* environment,
     binding_table->BindTemporaryResource(&binding_desc);
   }
 
-  ComPtr<ID3D12Resource> persistent_buffer;
   if (persistent_resource_size != 0) {
     DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
         &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE,
@@ -187,7 +173,6 @@ absl::Status Runtime::Compile(Environment* environment,
   }
 
   // The command recorder is a stateless object that records Dispatches into an existing Direct3D 12 command list.
-  ComPtr<IDMLCommandRecorder> command_recorder;
   DML_CHECK_SUCCEEDED(device->dml_device->CreateCommandRecorder(IID_PPV_ARGS(&command_recorder)));
 
   // Record execution of the operator initializer.
@@ -197,39 +182,11 @@ absl::Status Runtime::Compile(Environment* environment,
 
   device->CloseExecuteResetWait();
 
-  // Bind and execute the operator on the GPU.
-  device->command_list->SetDescriptorHeaps(ARRAYSIZE(descriptor_heaps), descriptor_heaps);
-
-  // Reset the binding table to bind for the operator we want to execute 
-  binding_table_desc.Dispatchable = compiled_operator.Get();
-  DML_CHECK_SUCCEEDED(binding_table->Reset(&binding_table_desc));
-
-  if (temporary_resource_size != 0) {
-    DML_BUFFER_BINDING buffer_binding{temporary_buffer.Get(), 0, temporary_resource_size};
-    DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
-    binding_table->BindTemporaryResource(&binding_desc);
-  }
-
-  if (persistent_resource_size != 0) {
-    DML_BUFFER_BINDING buffer_binding{persistent_buffer.Get(), 0, persistent_resource_size};
-    DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
-    binding_table->BindPersistentResource(&binding_desc);
-  }
-
   for (auto value : graph.values()) {
     if (graph.IsGraphInput(value->id)) {
-      auto resource = external_objects_->FindResource(value->id);
-      DML_BUFFER_BINDING input_buffer_binding{resource->Get(), 0, resource->size()};
-      DML_BINDING_DESC input_binding_desc{DML_BINDING_TYPE_BUFFER,
-                                          &input_buffer_binding};
-      binding_table->BindInputs(1, &input_binding_desc);
-    }
-    else if (graph.IsGraphOutput(value->id)) {
-      auto resource = external_objects_->FindResource(value->id);
-      DML_BUFFER_BINDING output_buffer_binding{resource->Get(), 0, resource->size()};
-      DML_BINDING_DESC output_binding_desc{DML_BINDING_TYPE_BUFFER,
-                                         &output_buffer_binding};
-      binding_table->BindOutputs(1, &output_binding_desc);
+      input_ids.push_back(value->id);
+    } else if (graph.IsGraphOutput(value->id)) {
+      output_ids.push_back(value->id);
     }
   }
 
@@ -294,6 +251,59 @@ absl::Status Runtime::Compile(Environment* environment,
     }
   }
 #endif
+
+  return absl::OkStatus();
+}
+
+absl::Status Runtime::Execute() {
+  // Bind and execute the operator on the GPU.
+  ID3D12DescriptorHeap* descriptor_heaps[] = {descriptor_heap.Get()};
+  device->command_list->SetDescriptorHeaps(ARRAYSIZE(descriptor_heaps), descriptor_heaps);
+
+  // Reset the binding table to bind for the operator we want to execute 
+  DML_BINDING_TABLE_DESC binding_table_desc{};
+  binding_table_desc.Dispatchable = compiled_operator.Get();
+  binding_table_desc.CPUDescriptorHandle = descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+  binding_table_desc.GPUDescriptorHandle = descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+  binding_table_desc.SizeInDescriptors = descriptor_count;
+  DML_CHECK_SUCCEEDED(binding_table->Reset(&binding_table_desc));
+
+  if (temporary_resource_size != 0) {
+    DML_BUFFER_BINDING buffer_binding{temporary_buffer.Get(), 0, temporary_resource_size};
+    DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
+    binding_table->BindTemporaryResource(&binding_desc);
+  }
+
+  if (persistent_resource_size != 0) {
+    DML_BUFFER_BINDING buffer_binding{persistent_buffer.Get(), 0, persistent_resource_size};
+    DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
+    binding_table->BindPersistentResource(&binding_desc);
+  }
+
+  for (auto id : input_ids) {
+    auto resource = external_objects_->FindResource(id);
+    DML_BUFFER_BINDING input_buffer_binding{resource->Get(), 0,
+                                            resource->bytes_size()};
+    DML_BINDING_DESC input_binding_desc{DML_BINDING_TYPE_BUFFER,
+                                        &input_buffer_binding};
+    binding_table->BindInputs(1, &input_binding_desc);
+  }
+
+  for (auto id : output_ids) {
+    auto resource = external_objects_->FindResource(id);
+    DML_BUFFER_BINDING output_buffer_binding{resource->Get(), 0,
+                                             resource->bytes_size()};
+    DML_BINDING_DESC output_binding_desc{DML_BINDING_TYPE_BUFFER,
+                                       &output_buffer_binding};
+    binding_table->BindOutputs(1, &output_binding_desc);
+  }
+
+  // Record execution of the compiled operator.
+  command_recorder->RecordDispatch(device->command_list,
+                                   compiled_operator.Get(),
+                                   binding_table.Get());
+
+  device->CloseExecuteResetWait();
 
   return absl::OkStatus();
 }

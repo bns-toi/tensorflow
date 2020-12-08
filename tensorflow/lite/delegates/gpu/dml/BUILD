@@ -83,6 +83,7 @@ cc_library(
     srcs = ["runtime.cc"],
     hdrs = ["runtime.h"],
     deps = [
+    	":environment",
     	"//tensorflow/lite/delegates/gpu/common:model",
     	"//tensorflow/lite/delegates/gpu/common:types",
     	"@com_google_absl//absl/memory",
