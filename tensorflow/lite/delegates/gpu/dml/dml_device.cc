@@ -56,11 +56,13 @@ class UniqueHandle {
 };
 
 DMLDevice::DMLDevice(
+    Microsoft::WRL::ComPtr<IDXGIFactory4>& factory,
     Microsoft::WRL::ComPtr<ID3D12Device>& device,
     Microsoft::WRL::ComPtr<ID3D12CommandQueue>& command_queue_,
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator>& command_allocator_,
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>& command_list_)
-    : d3d_device_ptr(device),
+    : dxgi_factory(factory),
+      d3d_device_ptr(device),
       command_queue_ptr(command_queue_),
       command_allocator_ptr(command_allocator_),
       command_list_ptr(command_list_),
@@ -90,28 +92,38 @@ void DMLDevice::Init() {
 }
 
 absl::Status CreateDefaultGPUDevice(DMLDevice* result) {
-  ComPtr<IDXGIFactory6> dxgi_factory;
-  DML_CHECK_SUCCEEDED(CreateDXGIFactory(IID_PPV_ARGS(&dxgi_factory)));
-
   // create device
   const D3D_FEATURE_LEVEL feature_level = D3D_FEATURE_LEVEL_11_0;
-
-  uint32_t adapter_index = 0;
   ComPtr<IDXGIAdapter1> adapter;
-  while (dxgi_factory->EnumAdapterByGpuPreference(
-             adapter_index, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
-             IID_PPV_ARGS(&adapter)) != DXGI_ERROR_NOT_FOUND) {
-    DXGI_ADAPTER_DESC1 desc = {};
-    DML_CHECK_SUCCEEDED(adapter->GetDesc1(&desc));
 
-    HRESULT hr = D3D12CreateDevice(adapter.Get(), feature_level,
-                                   IID_ID3D12Device, nullptr);
-    if (SUCCEEDED(hr)) {
-      break;
+  DWORD dxgi_factory_flags = 0;
+  Microsoft::WRL::ComPtr<IDXGIFactory4> dxgi_factory;
+  DML_CHECK_SUCCEEDED(CreateDXGIFactory2(dxgi_factory_flags, IID_PPV_ARGS(dxgi_factory.ReleaseAndGetAddressOf())));
+
+  ComPtr<IDXGIFactory6> dxgi_factory6;
+  //DML_CHECK_SUCCEEDED(CreateDXGIFactory(IID_PPV_ARGS(&dxgi_factory)));
+  HRESULT hr = dxgi_factory.As(&dxgi_factory6);
+  if (SUCCEEDED(hr)) {
+    uint32_t adapter_index = 0;
+    while (dxgi_factory6->EnumAdapterByGpuPreference(
+               adapter_index, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+               IID_PPV_ARGS(&adapter)) != DXGI_ERROR_NOT_FOUND) {
+      ++adapter_index;
+
+      DXGI_ADAPTER_DESC1 desc = {};
+      DML_CHECK_SUCCEEDED(adapter->GetDesc1(&desc));
+      if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) {
+        continue;
+      }
+
+      HRESULT hr = D3D12CreateDevice(adapter.Get(), feature_level,
+                                     IID_ID3D12Device, nullptr);
+      if (SUCCEEDED(hr)) {
+        break;
+      }
+
+      adapter = nullptr;
     }
-
-    ++adapter_index;
-    adapter = nullptr;
   }
 
   ComPtr<ID3D12Device> d3d_device;
@@ -139,7 +151,9 @@ absl::Status CreateDefaultGPUDevice(DMLDevice* result) {
       IID_PPV_ARGS(&command_list)));
 
   // construct
-  *result = DMLDevice(d3d_device, command_queue, command_allocator, command_list);
+  *result = DMLDevice(dxgi_factory, d3d_device, command_queue,
+                      command_allocator,
+                      command_list);
   return absl::OkStatus();
 }
 

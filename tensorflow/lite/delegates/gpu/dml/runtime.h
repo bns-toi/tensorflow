@@ -26,6 +26,7 @@ limitations under the License.
 namespace tflite {
 namespace gpu {
 namespace dml {
+
 class Runtime {
  public:
   Runtime(DMLDevice* device, const ObjectManager* external_objects);
@@ -36,6 +37,8 @@ class Runtime {
  private:
   DMLDevice* device;
   const ObjectManager* external_objects_;
+  ObjectManager const_objects_;
+  uint32_t next_const_id_ = 0;  // id for const objects
 
   Microsoft::WRL::ComPtr<IDMLCompiledOperator> compiled_operator;
   Microsoft::WRL::ComPtr<IDMLOperatorInitializer> operator_initializer;
@@ -47,9 +50,44 @@ class Runtime {
   Microsoft::WRL::ComPtr<ID3D12Resource> temporary_buffer;
   Microsoft::WRL::ComPtr<ID3D12Resource> persistent_buffer;
   Microsoft::WRL::ComPtr<IDMLCommandRecorder> command_recorder;
-  std::vector<uint32_t> input_ids;
-  std::vector<uint32_t> output_ids;
+  std::vector<D3DResource*> input_resources;
+  std::vector<D3DResource*> output_resources;
+
+  D3DResource* AllocateConstObject(const uint8_t* data, uint32_t size);
+
+  ValueId CreateInputTensorExpression(
+      const Value* value, ::dml::Scope& scope,
+      std::map<ValueId, ::dml::Expression>& expressions);
+  ::dml::Expression CreateConstInputTensorExpression(
+      const uint8_t* data, uint32_t size, ::dml::Scope& scope,
+      ::dml::TensorDesc::Dimensions& dimensions);
+  ValueId CreateConcatExpression(
+      const GraphFloat32& graph, const Node& node,
+      std::map<ValueId, ::dml::Expression>& expressions);
+  ValueId CreateConvolution2DExpression(
+      const GraphFloat32& graph, const Node& node, ::dml::Scope& scope,
+      std::map<ValueId, ::dml::Expression>& expressions);
+  ValueId CreatePadExpression(
+      const GraphFloat32& graph, const Node& node,
+      std::map<ValueId, ::dml::Expression>& expressions);
+  ValueId CreateReLUExpression(
+      const GraphFloat32& graph, const Node& node,
+      std::map<ValueId, ::dml::Expression>& expressions);
+  ValueId CreateSliceExpression(
+      const GraphFloat32& graph, const Node& node,
+      std::map<ValueId, ::dml::Expression>& expressions);
+  ValueId CreateClipExpression(
+      const GraphFloat32& graph, const Node& node,
+      std::map<ValueId, ::dml::Expression>& expressions,
+      float min_value, float max_value);
+  ValueId CreateMaximumExpression(
+      const GraphFloat32& graph, const Node& node,
+      std::map<ValueId, ::dml::Expression>& expressions);
+  ValueId CreateMinimumExpression(
+      const GraphFloat32& graph, const Node& node,
+      std::map<ValueId, ::dml::Expression>& expressions);
 };
+
 }  // namespace dml
 }  // namespace gpu
 }  // namespace tflite

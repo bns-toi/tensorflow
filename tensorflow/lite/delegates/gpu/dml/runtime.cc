@@ -24,26 +24,6 @@ namespace dml {
 
 namespace {
 
-::dml::Expression& FindInputExpression(
-    ::dml::Scope& scope, std::map<ValueId, ::dml::Expression>& expressions,
-    const Value* value) {
-
-  auto itr = expressions.find(value->id);
-  if (itr != expressions.end()) {
-    return itr->second;
-  }
-
-  const auto& shape = value->tensor.shape;
-  UINT tensor_sizes[4] = {shape.b, shape.w, shape.h, shape.c};
-  ::dml::TensorDesc::Dimensions dimensions(std::begin(tensor_sizes),
-                                           std::end(tensor_sizes));
-  ::dml::TensorDesc desc = {DML_TENSOR_DATA_TYPE_FLOAT32, dimensions};
-  ::dml::Expression input = ::dml::InputTensor(scope, 0, desc);
-
-  expressions[value->id] = input;
-  return expressions[value->id];
-}
-
 bool Is4Aligned(const SliceAttributes& attr) {
   return attr.strides.c == 1 && attr.starts.c % 4 == 0;
 }
@@ -99,16 +79,67 @@ Runtime::Runtime(DMLDevice* device_, const ObjectManager* external_objects)
     : device(device_), external_objects_(external_objects) {}
 
 absl::Status Runtime::Compile(const GraphFloat32& graph) {
-  ::dml::Scope scope(device->dml_device.Get());
+
+  ::dml::TensorPolicy policy = ::dml::TensorPolicy::Default();// ::dml::TensorPolicy::InterleavedChannel();
+  ::dml::Scope scope(device->dml_device.Get(), policy);
+
   std::map<ValueId, ::dml::Expression> expressions;
   ValueId last_output = 0;
 
-#if 1
-  auto inputs = graph.FindInputs(0);
-  auto input = FindInputExpression(scope, expressions, inputs[0]);
-  auto output = ::dml::Identity(input);
+  for (auto value : graph.values()) {
+    if (graph.IsGraphInput(value->id)) {
+      last_output = CreateInputTensorExpression(value, scope, expressions);
+    } else if (graph.IsGraphOutput(value->id)) {
+      output_resources.push_back(
+          external_objects_->FindResource(value->id));
+    }
+  }
 
-  DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION;
+#if 0
+  auto inputs = graph.FindInputs(0);
+  auto output0 = ::dml::Identity(expressions[inputs[0]->id]);
+  auto output = ::dml::Identity(output0);
+#else
+  std::vector<Node*> graph_nodes = graph.nodes();
+  for (int i = 0; i < graph_nodes.size(); ++i) {
+    const Node& node = *graph_nodes[i];
+    auto inputs = graph.FindInputs(node.id);
+    auto outputs = graph.FindOutputs(node.id);
+
+    auto op_type = OperationTypeFromString(node.operation.type);
+    switch (op_type) {
+      case OperationType::CONCAT: {
+        last_output = CreateConcatExpression(graph, node, expressions);
+      } break;
+      case OperationType::CONVOLUTION_2D: {
+        last_output = CreateConvolution2DExpression(graph, node, scope, expressions);
+      } break;
+      case OperationType::PAD: {
+        last_output = CreatePadExpression(graph, node, expressions);
+      } break;
+      case OperationType::RELU: {
+        last_output = CreateReLUExpression(graph, node, expressions);
+      } break;
+      case OperationType::SLICE: {
+        last_output = CreateSliceExpression(graph, node, expressions);
+      } break;
+      case OperationType::MAXIMUM: {
+        last_output = CreateMaximumExpression(graph, node, expressions);
+      } break;
+      case OperationType::MINIMUM: {
+        last_output = CreateMinimumExpression(graph, node, expressions);
+      } break;
+      default:
+        return absl::UnimplementedError(absl::StrCat(
+            "No support of ", node.operation.type, " with this parameters"));
+    }
+  }
+
+  auto output = expressions[last_output];
+#endif
+
+  DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_NONE;
+  //DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION;
   compiled_operator = scope.Compile(execution_flags, {output});
 
   IDMLCompiledOperator* compiled_operators[] = {compiled_operator.Get()};
@@ -182,77 +213,263 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
 
   device->CloseExecuteResetWait();
 
-  for (auto value : graph.values()) {
-    if (graph.IsGraphInput(value->id)) {
-      input_ids.push_back(value->id);
-    } else if (graph.IsGraphOutput(value->id)) {
-      output_ids.push_back(value->id);
-    }
-  }
-
-#else
-  std::vector<Node*> graph_nodes = graph.nodes();
-  for (int i = 0; i < graph_nodes.size(); ++i) {
-    const Node& node = *graph_nodes[i];
-    auto inputs = graph.FindInputs(node.id);
-    auto outputs = graph.FindOutputs(node.id);
-
-    auto op_type = OperationTypeFromString(node.operation.type);
-    switch (op_type) {
-      case OperationType::CONVOLUTION_2D: {
-        auto attr = absl::any_cast<Convolution2DAttributes>(node.operation.attributes);
-
-        auto input = FindInputExpression(scope, expressions, inputs[0]);
-//        auto output = ::dml::Convolution(input,
-
-      } break;
-      case OperationType::PAD: {
-        auto attr = absl::any_cast<PadAttributes>(node.operation.attributes);
-        DML_PADDING_MODE padding_mode =
-            attr.type == PaddingContentType::ZEROS
-                ? DML_PADDING_MODE_CONSTANT
-                : attr.type == PaddingContentType::REFLECT
-                      ? DML_PADDING_MODE_REFLECTION
-                      : DML_PADDING_MODE_EDGE;
-        uint32_t start_padding[] = {0, 0, 0, 0};
-        uint32_t end_padding[] = {attr.prepended.b, attr.prepended.w,
-                                  attr.prepended.h, attr.prepended.c};
-
-        auto input = FindInputExpression(scope, expressions, inputs[0]);
-        auto output = ::dml::Padding(input, padding_mode, 0.0f,
-                                     ::dml::Span<uint32_t>(start_padding),
-                                     ::dml::Span<uint32_t>(end_padding));
-
-        expressions[outputs[0]->id] = output;
-        last_output = outputs[0]->id;
-      } break;
-      case OperationType::SLICE: {
-        auto attr = absl::any_cast<SliceAttributes>(node.operation.attributes);
-        const auto& shape = inputs[0]->tensor.shape;
-        int4 offset = GetOffset(attr, shape.w, shape.h, shape.c, shape.b);
-
-        uint32_t offsets[] = {offset.w, offset.x, offset.y, offset.z};
-        uint32_t sizes[] = {shape.b, shape.w, shape.h, shape.c};
-        uint32_t strides[] = {attr.strides.b, attr.strides.w,
-                                         attr.strides.h, attr.strides.c};
-
-        auto input = FindInputExpression(scope, expressions, inputs[0]);
-        auto output = ::dml::Slice(input,
-          ::dml::Span<uint32_t>(offsets),
-          ::dml::Span<uint32_t>(sizes),
-          ::dml::Span<uint32_t>(strides));
-
-        expressions[outputs[0]->id] = output;
-        last_output = outputs[0]->id;
-      } break;
-      default:
-        return absl::UnimplementedError(absl::StrCat(
-            "No support of ", node.operation.type, " with this parameters"));
-    }
-  }
-#endif
-
   return absl::OkStatus();
+}
+
+D3DResource* Runtime::AllocateConstObject(const uint8_t* data, uint32_t size) {
+  D3DResource d3d_resource;
+  CreateResource(device, AccessType::READ, size, &d3d_resource);
+
+  const_objects_.RegisterResource(next_const_id_, d3d_resource);
+  D3DResource* resource = const_objects_.FindResource(next_const_id_);
+  next_const_id_++;
+
+  resource->Write(device, absl::MakeConstSpan(data, size));
+
+  return resource;
+}
+
+ValueId Runtime::CreateInputTensorExpression(
+    const Value* value, ::dml::Scope& scope,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  uint32_t index = input_resources.size();
+  input_resources.push_back(external_objects_->FindResource(value->id));
+
+  const auto& shape = value->tensor.shape;
+  UINT tensor_sizes[4] = {shape.b, shape.c, shape.h, shape.w};
+  ::dml::TensorDesc::Dimensions dimensions(std::begin(tensor_sizes),
+                                           std::end(tensor_sizes));
+  auto output = ::dml::InputTensor(
+      scope, index,
+      ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, dimensions));
+
+  expressions[value->id] = output;
+  return value->id;
+}
+
+::dml::Expression Runtime::CreateConstInputTensorExpression(
+    const uint8_t* data, uint32_t size, ::dml::Scope& scope,
+    ::dml::TensorDesc::Dimensions& dimensions)
+{
+  uint32_t index = input_resources.size();
+  D3DResource* resource = AllocateConstObject(data, size);
+  input_resources.push_back(resource);
+
+  return ::dml::InputTensor(
+      scope, index,
+      ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, dimensions));
+}
+
+::dml::Expression Concat(::dml::Span<const ::dml::Expression> inputs, uint32_t axis) {
+  assert(!inputs.empty());
+
+  ::dml::detail::GraphBuilder* builder = inputs[0].Impl()->GetGraphBuilder();
+  DML_TENSOR_DATA_TYPE dataType = inputs[0].Impl()->GetOutputDesc().dataType;
+
+  ::dml::TensorDimensions outputSizes = inputs[0].Impl()->GetOutputDesc().sizes;
+  outputSizes[axis] = 0;
+
+  std::vector<::dml::TensorDesc> inputTensors;
+  inputTensors.reserve(inputs.size());
+
+  std::vector<DML_TENSOR_DESC> inputDescs;
+  inputDescs.reserve(inputs.size());
+
+  std::vector<::dml::detail::NodeOutput*> inputNodes;
+  inputNodes.reserve(inputs.size());
+
+  for (::dml::Expression input : inputs) {
+    inputTensors.push_back(input.Impl()->GetOutputDesc());
+    ::dml::TensorDesc& inputTensor = inputTensors.back();
+    outputSizes[axis] += inputTensor.sizes[axis];
+    inputDescs.push_back(*inputTensor.AsPtr<DML_TENSOR_DESC>());
+    inputNodes.push_back(input.Impl());
+  }
+
+  ::dml::TensorDesc outputTensor(dataType, std::move(outputSizes), builder->GetTensorPolicy());
+
+  DML_JOIN_OPERATOR_DESC desc = {};
+  desc.Axis = axis;
+  desc.InputCount = static_cast<uint32_t>(inputDescs.size());
+  desc.InputTensors = inputDescs.data();
+  desc.OutputTensor = outputTensor.AsPtr<DML_TENSOR_DESC>();
+
+  ::dml::detail::NodeID node =
+      builder->CreateOperatorNode(DML_OPERATOR_JOIN, &desc, inputNodes);
+  ::dml::detail::NodeOutput* output =
+      builder->CreateNodeOutput(node, 0, std::move(outputTensor));
+
+  return output;
+}
+
+ValueId Runtime::CreateConcatExpression(
+    const GraphFloat32& graph, const Node& node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto input_values = graph.FindInputs(node.id);
+  auto output_values = graph.FindOutputs(node.id);
+  auto attr = absl::any_cast<ConcatAttributes>(node.operation.attributes);
+
+  const ::dml::Expression inputs[2] = {expressions[input_values[0]->id],
+                                       expressions[input_values[1]->id]};
+      
+  auto output = ::dml::Join(::dml::Span<const ::dml::Expression>(inputs),
+//  auto output = Concat(::dml::Span<const ::dml::Expression>{inputs},
+                            static_cast<uint32_t>(attr.axis));
+
+  expressions[output_values[0]->id] = output;
+  return output_values[0]->id;
+}
+
+ValueId Runtime::CreateConvolution2DExpression(
+    const GraphFloat32& graph, const Node& node, ::dml::Scope& scope,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto inputs = graph.FindInputs(node.id);
+  auto outputs = graph.FindOutputs(node.id);
+  auto attr = absl::any_cast<Convolution2DAttributes>(node.operation.attributes);
+
+  // Input Expression
+  auto input = expressions[inputs[0]->id];
+
+  // Weights Expression
+  const auto& weights_shape = attr.weights.shape;
+  UINT weights_tensor_sizes[4] = {weights_shape.o, weights_shape.i,
+                                  weights_shape.h, weights_shape.w};
+  ::dml::TensorDesc::Dimensions weights_dimensions(
+      std::begin(weights_tensor_sizes), std::end(weights_tensor_sizes));
+  auto filter = CreateConstInputTensorExpression(
+      reinterpret_cast<const uint8_t*>(attr.weights.data.data()),
+      attr.weights.data.size() * sizeof(float), scope, weights_dimensions);
+
+  // Bias Expression
+  const auto& bias_shape = attr.bias.shape;
+  UINT bias_tensor_sizes[4] = {1, bias_shape.v, 1, 1};
+  ::dml::TensorDesc::Dimensions bias_dimensions(std::begin(bias_tensor_sizes),
+                                                std::end(bias_tensor_sizes));
+  auto bias = CreateConstInputTensorExpression(
+      reinterpret_cast<const uint8_t*>(attr.bias.data.data()),
+      attr.bias.data.size() * sizeof(float), scope, bias_dimensions);
+
+  // Parameters
+  const uint32_t strides[2] = {attr.strides.h, attr.strides.w};
+  const uint32_t dilations[2] = {attr.dilations.h, attr.dilations.w};
+  const uint32_t start_padding[2] = {attr.padding.prepended.h,
+                                     attr.padding.prepended.w};
+  const uint32_t end_padding[2] = {attr.padding.appended.h,
+                                   attr.padding.appended.w};
+
+  // Convolution 2D Expression
+  auto output = ::dml::ConvolutionBuilder(input, filter, bias)
+                    .Strides(::dml::Span<const uint32_t>{strides})
+                    .Dilations(::dml::Span<const uint32_t>{dilations})
+                    .StartPadding(::dml::Span<const uint32_t>{start_padding})
+                    .EndPadding(::dml::Span<const uint32_t>{end_padding})
+                    .Build();
+
+  expressions[outputs[0]->id] = output;
+  return outputs[0]->id;
+}
+
+ValueId Runtime::CreatePadExpression(
+    const GraphFloat32& graph, const Node& node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto inputs = graph.FindInputs(node.id);
+  auto outputs = graph.FindOutputs(node.id);
+  auto attr = absl::any_cast<PadAttributes>(node.operation.attributes);
+  DML_PADDING_MODE padding_mode = attr.type == PaddingContentType::ZEROS
+                                      ? DML_PADDING_MODE_CONSTANT
+                                      : attr.type == PaddingContentType::REFLECT
+                                            ? DML_PADDING_MODE_REFLECTION
+                                            : DML_PADDING_MODE_EDGE;
+  const uint32_t start_padding[4] = {attr.prepended.b, attr.prepended.c,
+                                     attr.prepended.h, attr.prepended.w};
+  const uint32_t end_padding[4] = {attr.appended.b, attr.appended.c,
+                                   attr.appended.h, attr.appended.w};
+
+  auto input = expressions[inputs[0]->id];
+  auto output = ::dml::Padding(input, padding_mode, 0.0f,
+                               ::dml::Span<const uint32_t>{start_padding},
+                               ::dml::Span<const uint32_t>{end_padding});
+
+  expressions[outputs[0]->id] = output;
+  return outputs[0]->id;
+}
+
+ValueId Runtime::CreateReLUExpression(
+    const GraphFloat32& graph, const Node& node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto inputs = graph.FindInputs(node.id);
+  auto outputs = graph.FindOutputs(node.id);
+  auto attr = absl::any_cast<ReLUAttributes>(node.operation.attributes);
+
+  auto input = expressions[inputs[0]->id];
+  auto output = ::dml::ActivationRelu(input);
+
+  expressions[outputs[0]->id] = output;
+  return outputs[0]->id;
+}
+
+ValueId Runtime::CreateSliceExpression(
+    const GraphFloat32& graph, const Node& node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto inputs = graph.FindInputs(node.id);
+  auto outputs = graph.FindOutputs(node.id);
+  auto attr = absl::any_cast<SliceAttributes>(node.operation.attributes);
+
+  const auto& input_shape = inputs[0]->tensor.shape;
+  const auto& output_shape = outputs[0]->tensor.shape;
+  int4 offset = GetOffset(attr, input_shape.w, input_shape.h, input_shape.c,
+                          input_shape.b);
+
+  const uint32_t offsets[4] = {offset.w, offset.z, offset.y, offset.x};
+  const uint32_t sizes[4] = {output_shape.b, output_shape.c, output_shape.h,
+                             output_shape.w};
+  const uint32_t strides[4] = {attr.strides.b, attr.strides.c, attr.strides.h,
+                               attr.strides.w};
+
+  auto input = expressions[inputs[0]->id];
+  auto output = ::dml::Slice(input, ::dml::Span<const uint32_t>{offsets},
+                             ::dml::Span<const uint32_t>{sizes},
+                             ::dml::Span<const uint32_t>{strides});
+
+  expressions[outputs[0]->id] = output;
+  return outputs[0]->id;
+}
+
+ValueId Runtime::CreateClipExpression(
+    const GraphFloat32& graph, const Node& node,
+    std::map<ValueId, ::dml::Expression>& expressions,
+    float min_value, float max_value) {
+  auto input_values = graph.FindInputs(node.id);
+  auto output_values = graph.FindOutputs(node.id);
+
+  auto input = expressions[input_values[0]->id];
+  auto output = ::dml::Clip(input, min_value, max_value);
+
+  expressions[output_values[0]->id] = output;
+
+
+  auto desc_sizes = output.Impl()->GetOutputDesc().sizes;
+  int x = desc_sizes[0];
+  int y = desc_sizes[1];
+  int z = desc_sizes[2];
+  int w = desc_sizes[3];
+  return output_values[0]->id;
+}
+
+ValueId Runtime::CreateMaximumExpression(
+    const GraphFloat32& graph, const Node& node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto attr = absl::any_cast<ElementwiseAttributes>(node.operation.attributes);
+  const float* scalar = absl::get_if<float>(&attr.param);
+  return CreateClipExpression(graph, node, expressions, FLT_MIN, *scalar);
+}
+
+ValueId Runtime::CreateMinimumExpression(
+    const GraphFloat32& graph, const Node& node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto attr = absl::any_cast<ElementwiseAttributes>(node.operation.attributes);
+  const float* scalar = absl::get_if<float>(&attr.param);
+  return CreateClipExpression(graph, node, expressions, *scalar, FLT_MAX);
 }
 
 absl::Status Runtime::Execute() {
@@ -280,8 +497,7 @@ absl::Status Runtime::Execute() {
     binding_table->BindPersistentResource(&binding_desc);
   }
 
-  for (auto id : input_ids) {
-    auto resource = external_objects_->FindResource(id);
+  for (auto resource : input_resources) {
     DML_BUFFER_BINDING input_buffer_binding{resource->Get(), 0,
                                             resource->bytes_size()};
     DML_BINDING_DESC input_binding_desc{DML_BINDING_TYPE_BUFFER,
@@ -289,8 +505,7 @@ absl::Status Runtime::Execute() {
     binding_table->BindInputs(1, &input_binding_desc);
   }
 
-  for (auto id : output_ids) {
-    auto resource = external_objects_->FindResource(id);
+  for (auto resource : output_resources) {
     DML_BUFFER_BINDING output_buffer_binding{resource->Get(), 0,
                                              resource->bytes_size()};
     DML_BINDING_DESC output_binding_desc{DML_BINDING_TYPE_BUFFER,
