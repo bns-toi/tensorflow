@@ -32,6 +32,7 @@ class DMLDevice {
  public:
   DMLDevice() = default;
   DMLDevice(Microsoft::WRL::ComPtr<IDXGIFactory4>& factory,
+            Microsoft::WRL::ComPtr<IDXGIAdapter1>& adapter,
             Microsoft::WRL::ComPtr<ID3D12Device>& device,
             Microsoft::WRL::ComPtr<ID3D12CommandQueue>& command_queue,
             Microsoft::WRL::ComPtr<ID3D12CommandAllocator>& command_allocator,
@@ -46,6 +47,7 @@ class DMLDevice {
   void CloseExecuteResetWait();
 
   Microsoft::WRL::ComPtr<IDXGIFactory4> dxgi_factory;
+  Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgi_adapter;
   Microsoft::WRL::ComPtr<ID3D12Device> d3d_device_ptr;
   Microsoft::WRL::ComPtr<ID3D12CommandQueue> command_queue_ptr;
   Microsoft::WRL::ComPtr<ID3D12CommandAllocator> command_allocator_ptr;

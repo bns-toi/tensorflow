@@ -138,13 +138,13 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
   auto output = expressions[last_output];
 #endif
 
+//  DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION;
   DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_NONE;
-  //DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION;
   compiled_operator = scope.Compile(execution_flags, {output});
 
   IDMLCompiledOperator* compiled_operators[] = {compiled_operator.Get()};
   DML_CHECK_SUCCEEDED(device->dml_device->CreateOperatorInitializer(
-      ARRAYSIZE(compiled_operators), compiled_operators,
+      1, compiled_operator.GetAddressOf(),
       IID_PPV_ARGS(&operator_initializer)));
 
   DML_BINDING_PROPERTIES initialize_binding_properties = operator_initializer->GetBindingProperties();
@@ -173,32 +173,50 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
   DML_CHECK_SUCCEEDED(device->dml_device->CreateBindingTable(
       &binding_table_desc, IID_PPV_ARGS(&binding_table)));
 
-  // Create the temporary and persistent resources that are necessary for executing an operator.
-  temporary_resource_size =
-      std::max(initialize_binding_properties.TemporaryResourceSize, execute_binding_properties.TemporaryResourceSize);
-  persistent_resource_size = execute_binding_properties.PersistentResourceSize;
-
-  // Bind and initialize the operator on the GPU.
-  if (temporary_resource_size != 0) {
+  // Initialize and bind the operator on the GPU.
+  if (execute_binding_properties.TemporaryResourceSize > 0) {
     DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
         &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(temporary_resource_size),
+        &CD3DX12_RESOURCE_DESC::Buffer(
+            execute_binding_properties.TemporaryResourceSize,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
         D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&temporary_buffer)));
-
-    DML_BUFFER_BINDING buffer_binding{temporary_buffer.Get(), 0, temporary_resource_size};
-    DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
-    binding_table->BindTemporaryResource(&binding_desc);
+  }
+  Microsoft::WRL::ComPtr<ID3D12Resource> initialize_temporary_buffer;
+  if (initialize_binding_properties.TemporaryResourceSize >
+      execute_binding_properties.TemporaryResourceSize) {
+    DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
+        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE,
+        &CD3DX12_RESOURCE_DESC::Buffer(
+            initialize_binding_properties.TemporaryResourceSize,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
+        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&temporary_buffer)));
+  } else if (initialize_binding_properties.TemporaryResourceSize > 0) {
+    initialize_temporary_buffer = temporary_buffer;
   }
 
-  if (persistent_resource_size != 0) {
+  if (initialize_temporary_buffer) {
+    DML_BUFFER_BINDING buffer_binding{
+        temporary_buffer.Get(), 0,
+        execute_binding_properties.TemporaryResourceSize};
+    binding_table->BindTemporaryResource(
+        &DML_BINDING_DESC{DML_BINDING_TYPE_BUFFER, &buffer_binding});
+  }
+
+  if (execute_binding_properties.PersistentResourceSize > 0) {
     DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
         &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT), D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(persistent_resource_size),
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&persistent_buffer)));
+        &CD3DX12_RESOURCE_DESC::Buffer(
+            execute_binding_properties.PersistentResourceSize,
+            D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
+        D3D12_RESOURCE_STATE_COMMON, nullptr,
+        IID_PPV_ARGS(&persistent_buffer)));
+  }
 
-    // The persistent resource should be bound as the output to the
-    // IDMLOperatorInitializer.
-    DML_BUFFER_BINDING buffer_binding{persistent_buffer.Get(), 0, persistent_resource_size};
+  if (persistent_buffer) {
+    DML_BUFFER_BINDING buffer_binding{
+        persistent_buffer.Get(), 0,
+        execute_binding_properties.PersistentResourceSize};
     DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
     binding_table->BindOutputs(1, &binding_desc);
   }
@@ -218,7 +236,7 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
 
 D3DResource* Runtime::AllocateConstObject(const uint8_t* data, uint32_t size) {
   D3DResource d3d_resource;
-  CreateResource(device, AccessType::READ, size, &d3d_resource);
+  CreateResource(device, AccessType::WRITE, size, &d3d_resource);
 
   const_objects_.RegisterResource(next_const_id_, d3d_resource);
   D3DResource* resource = const_objects_.FindResource(next_const_id_);
@@ -330,8 +348,26 @@ ValueId Runtime::CreateConvolution2DExpression(
   // Input Expression
   auto input = expressions[inputs[0]->id];
 
+#if 1
   // Weights Expression
   const auto& weights_shape = attr.weights.shape;
+  UINT elements_count =
+      weights_shape.o * weights_shape.i * weights_shape.h * weights_shape.w;
+  std::vector<float> gpu_data;
+  gpu_data.reserve(elements_count);
+  for (uint32_t o = 0; o < weights_shape.o; o++) {
+    for (uint32_t h = 0; h < weights_shape.h; h++) {
+      for (uint32_t w = 0; w < weights_shape.w; w++) {
+        for (uint32_t i = 0; i < weights_shape.i; i++) {
+          uint32_t idx =
+              w + h * weights_shape.w + i * weights_shape.h * weights_shape.w +
+              o * weights_shape.i * weights_shape.h * weights_shape.w;
+          gpu_data.push_back(attr.weights.data[idx]);
+        }
+      }
+    }
+  }
+
   UINT weights_tensor_sizes[4] = {weights_shape.o, weights_shape.i,
                                   weights_shape.h, weights_shape.w};
   ::dml::TensorDesc::Dimensions weights_dimensions(
@@ -364,7 +400,9 @@ ValueId Runtime::CreateConvolution2DExpression(
                     .StartPadding(::dml::Span<const uint32_t>{start_padding})
                     .EndPadding(::dml::Span<const uint32_t>{end_padding})
                     .Build();
-
+#else
+  auto output = ::dml::Identity(input);
+#endif
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;
 }
@@ -386,9 +424,13 @@ ValueId Runtime::CreatePadExpression(
                                    attr.appended.h, attr.appended.w};
 
   auto input = expressions[inputs[0]->id];
+#if 1
   auto output = ::dml::Padding(input, padding_mode, 0.0f,
                                ::dml::Span<const uint32_t>{start_padding},
                                ::dml::Span<const uint32_t>{end_padding});
+#else
+  auto output = ::dml::Identity(input);
+#endif
 
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;
@@ -402,7 +444,11 @@ ValueId Runtime::CreateReLUExpression(
   auto attr = absl::any_cast<ReLUAttributes>(node.operation.attributes);
 
   auto input = expressions[inputs[0]->id];
+#if 1
   auto output = ::dml::ActivationRelu(input);
+#else
+  auto output = ::dml::Identity(input);
+#endif
 
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;
@@ -446,13 +492,6 @@ ValueId Runtime::CreateClipExpression(
   auto output = ::dml::Clip(input, min_value, max_value);
 
   expressions[output_values[0]->id] = output;
-
-
-  auto desc_sizes = output.Impl()->GetOutputDesc().sizes;
-  int x = desc_sizes[0];
-  int y = desc_sizes[1];
-  int z = desc_sizes[2];
-  int w = desc_sizes[3];
   return output_values[0]->id;
 }
 
@@ -461,7 +500,7 @@ ValueId Runtime::CreateMaximumExpression(
     std::map<ValueId, ::dml::Expression>& expressions) {
   auto attr = absl::any_cast<ElementwiseAttributes>(node.operation.attributes);
   const float* scalar = absl::get_if<float>(&attr.param);
-  return CreateClipExpression(graph, node, expressions, FLT_MIN, *scalar);
+  return CreateClipExpression(graph, node, expressions, *scalar, FLT_MAX);
 }
 
 ValueId Runtime::CreateMinimumExpression(
@@ -469,41 +508,85 @@ ValueId Runtime::CreateMinimumExpression(
     std::map<ValueId, ::dml::Expression>& expressions) {
   auto attr = absl::any_cast<ElementwiseAttributes>(node.operation.attributes);
   const float* scalar = absl::get_if<float>(&attr.param);
-  return CreateClipExpression(graph, node, expressions, *scalar, FLT_MAX);
+  return CreateClipExpression(graph, node, expressions, FLT_MIN, *scalar);
 }
 
 absl::Status Runtime::Execute() {
   // Bind and execute the operator on the GPU.
   ID3D12DescriptorHeap* descriptor_heaps[] = {descriptor_heap.Get()};
-  device->command_list->SetDescriptorHeaps(ARRAYSIZE(descriptor_heaps), descriptor_heaps);
+  device->command_list->SetDescriptorHeaps(ARRAYSIZE(descriptor_heaps),
+                                           descriptor_heaps);
 
-  // Reset the binding table to bind for the operator we want to execute 
+  // Reset the binding table to bind for the operator we want to execute
   DML_BINDING_TABLE_DESC binding_table_desc{};
   binding_table_desc.Dispatchable = compiled_operator.Get();
-  binding_table_desc.CPUDescriptorHandle = descriptor_heap->GetCPUDescriptorHandleForHeapStart();
-  binding_table_desc.GPUDescriptorHandle = descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+  binding_table_desc.CPUDescriptorHandle =
+      descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+  binding_table_desc.GPUDescriptorHandle =
+      descriptor_heap->GetGPUDescriptorHandleForHeapStart();
   binding_table_desc.SizeInDescriptors = descriptor_count;
   DML_CHECK_SUCCEEDED(binding_table->Reset(&binding_table_desc));
 
-  if (temporary_resource_size != 0) {
-    DML_BUFFER_BINDING buffer_binding{temporary_buffer.Get(), 0, temporary_resource_size};
+  if (temporary_buffer) {
+    DML_BUFFER_BINDING buffer_binding{temporary_buffer.Get(), 0,
+                                      temporary_buffer->GetDesc().Width};
     DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
     binding_table->BindTemporaryResource(&binding_desc);
   }
 
-  if (persistent_resource_size != 0) {
-    DML_BUFFER_BINDING buffer_binding{persistent_buffer.Get(), 0, persistent_resource_size};
+  if (persistent_buffer) {
+    DML_BUFFER_BINDING buffer_binding{persistent_buffer.Get(), 0,
+                                      persistent_buffer->GetDesc().Width};
     DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
     binding_table->BindPersistentResource(&binding_desc);
   }
 
+#if 0
+  std::vector<DML_BUFFER_BINDING> buffer_bindings;
+  std::vector<DML_BINDING_DESC> input_bindings;
+  buffer_bindings.reserve(input_resources.size());
+  input_bindings.reserve(input_resources.size());
   for (auto resource : input_resources) {
-    DML_BUFFER_BINDING input_buffer_binding{resource->Get(), 0,
-                                            resource->bytes_size()};
-    DML_BINDING_DESC input_binding_desc{DML_BINDING_TYPE_BUFFER,
-                                        &input_buffer_binding};
-    binding_table->BindInputs(1, &input_binding_desc);
+    DML_BUFFER_BINDING input_buffer_binding{resource->Get(), 0, resource->bytes_size()};
+    buffer_bindings.push_back(input_buffer_binding);
+
+    DML_BINDING_DESC input_binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_bindings[buffer_bindings.size() - 1]};
+    input_bindings.push_back(input_binding_desc);
   }
+  binding_table->BindInputs(input_bindings.size(), input_bindings.data());
+#else
+  DML_BUFFER_BINDING buffer_bindings[] = {
+    {input_resources[0]->Get()},
+    {input_resources[1]->Get(), 0, input_resources[1]->Get()->GetDesc().Width},
+    {input_resources[2]->Get(), 0, input_resources[2]->Get()->GetDesc().Width},
+    {input_resources[3]->Get(), 0, input_resources[3]->Get()->GetDesc().Width},
+    {input_resources[4]->Get(), 0, input_resources[4]->Get()->GetDesc().Width},
+    {input_resources[5]->Get(), 0, input_resources[5]->Get()->GetDesc().Width},
+    {input_resources[6]->Get(), 0, input_resources[6]->Get()->GetDesc().Width},
+    {input_resources[7]->Get(), 0, input_resources[7]->Get()->GetDesc().Width},
+    {input_resources[8]->Get(), 0, input_resources[8]->Get()->GetDesc().Width},
+    {input_resources[9]->Get(), 0, input_resources[9]->Get()->GetDesc().Width},
+    {input_resources[10]->Get(), 0, input_resources[10]->Get()->GetDesc().Width},
+    {input_resources[11]->Get(), 0, input_resources[11]->Get()->GetDesc().Width},
+    {input_resources[12]->Get(), 0, input_resources[12]->Get()->GetDesc().Width}
+  };
+  DML_BINDING_DESC input_bindings[] = {
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[0]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[1]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[2]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[3]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[4]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[5]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[6]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[7]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[8]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[9]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[10]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[11]},
+      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[12]},
+  };
+  binding_table->BindInputs(ARRAYSIZE(input_bindings), input_bindings);
+#endif
 
   for (auto resource : output_resources) {
     DML_BUFFER_BINDING output_buffer_binding{resource->Get(), 0,

@@ -45,8 +45,6 @@ class Runtime {
   UINT descriptor_count;
   Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptor_heap;
   Microsoft::WRL::ComPtr<IDMLBindingTable> binding_table;
-  UINT64 temporary_resource_size;
-  UINT64 persistent_resource_size;
   Microsoft::WRL::ComPtr<ID3D12Resource> temporary_buffer;
   Microsoft::WRL::ComPtr<ID3D12Resource> persistent_buffer;
   Microsoft::WRL::ComPtr<IDMLCommandRecorder> command_recorder;
