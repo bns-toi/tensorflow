@@ -17,6 +17,9 @@ limitations under the License.
 
 #include <algorithm>
 #include <cstring>
+#ifdef _DEBUG
+#include <chrono>
+#endif // _DEBUG
 
 #include "absl/memory/memory.h"
 #include "absl/types/span.h"
@@ -420,13 +423,34 @@ class InferenceRunnerImpl : public InferenceRunner {
   }
 
   absl::Status Run() override {
+#ifdef _DEBUG
+    auto start = std::chrono::system_clock::now();
+#endif // _DEBUG
     for (auto& obj : inputs_) {
       RETURN_IF_ERROR(obj->CopyFromExternalObject());
     }
+#ifdef _DEBUG
+    auto end = std::chrono::system_clock::now();
+    auto msec = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << msec << " ms \n";
+    start = std::chrono::system_clock::now();
+#endif // _DEBUG
     RETURN_IF_ERROR(runtime_->Execute());
+#ifdef _DEBUG
+    end = std::chrono::system_clock::now();
+    msec = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << msec << " ms \n";
+    start = std::chrono::system_clock::now();
+#endif // _DEBUG
     for (auto& obj : outputs_) {
       RETURN_IF_ERROR(obj->CopyToExternalObject());
     }
+#ifdef _DEBUG
+    end = std::chrono::system_clock::now();
+    msec = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << msec << " ms \n";
+    start = std::chrono::system_clock::now();
+#endif // _DEBUG
     return absl::OkStatus();
   }
 

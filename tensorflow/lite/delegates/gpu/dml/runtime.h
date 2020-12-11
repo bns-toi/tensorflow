@@ -54,16 +54,20 @@ class Runtime {
   D3DResource* AllocateConstObject(const uint8_t* data, uint32_t size);
 
   ValueId CreateInputTensorExpression(
-      const Value* value, ::dml::Scope& scope,
+      ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+      const ::dml::TensorPolicy& policy, const Value* value,
       std::map<ValueId, ::dml::Expression>& expressions);
   ::dml::Expression CreateConstInputTensorExpression(
-      const uint8_t* data, uint32_t size, ::dml::Scope& scope,
+      ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+      const ::dml::TensorPolicy& policy, const uint8_t* data, uint32_t size,
       ::dml::TensorDesc::Dimensions& dimensions);
   ValueId CreateConcatExpression(
       const GraphFloat32& graph, const Node& node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateConvolution2DExpression(
-      const GraphFloat32& graph, const Node& node, ::dml::Scope& scope,
+      ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+      const ::dml::TensorPolicy& policy, const GraphFloat32& graph,
+      const Node& node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreatePadExpression(
       const GraphFloat32& graph, const Node& node,

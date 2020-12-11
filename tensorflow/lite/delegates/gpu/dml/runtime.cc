@@ -80,7 +80,10 @@ Runtime::Runtime(DMLDevice* device_, const ObjectManager* external_objects)
 
 absl::Status Runtime::Compile(const GraphFloat32& graph) {
 
-  ::dml::TensorPolicy policy = ::dml::TensorPolicy::Default();// ::dml::TensorPolicy::InterleavedChannel();
+  DML_TENSOR_FLAGS flags = DML_TENSOR_FLAG_NONE;
+//  flags |= DML_TENSOR_FLAG_OWNED_BY_DML;
+//  ::dml::TensorPolicy policy = ::dml::TensorPolicy::Default();
+  ::dml::TensorPolicy policy = ::dml::TensorPolicy::InterleavedChannel();
   ::dml::Scope scope(device->dml_device.Get(), policy);
 
   std::map<ValueId, ::dml::Expression> expressions;
@@ -88,18 +91,14 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
 
   for (auto value : graph.values()) {
     if (graph.IsGraphInput(value->id)) {
-      last_output = CreateInputTensorExpression(value, scope, expressions);
+      last_output =
+          CreateInputTensorExpression(scope, flags, policy, value, expressions);
     } else if (graph.IsGraphOutput(value->id)) {
       output_resources.push_back(
           external_objects_->FindResource(value->id));
     }
   }
 
-#if 0
-  auto inputs = graph.FindInputs(0);
-  auto output0 = ::dml::Identity(expressions[inputs[0]->id]);
-  auto output = ::dml::Identity(output0);
-#else
   std::vector<Node*> graph_nodes = graph.nodes();
   for (int i = 0; i < graph_nodes.size(); ++i) {
     const Node& node = *graph_nodes[i];
@@ -112,7 +111,8 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
         last_output = CreateConcatExpression(graph, node, expressions);
       } break;
       case OperationType::CONVOLUTION_2D: {
-        last_output = CreateConvolution2DExpression(graph, node, scope, expressions);
+        last_output = CreateConvolution2DExpression(scope, flags, policy, graph,
+                                                    node, expressions);
       } break;
       case OperationType::PAD: {
         last_output = CreatePadExpression(graph, node, expressions);
@@ -136,7 +136,6 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
   }
 
   auto output = expressions[last_output];
-#endif
 
 //  DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION;
   DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_NONE;
@@ -248,7 +247,8 @@ D3DResource* Runtime::AllocateConstObject(const uint8_t* data, uint32_t size) {
 }
 
 ValueId Runtime::CreateInputTensorExpression(
-    const Value* value, ::dml::Scope& scope,
+    ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+    const ::dml::TensorPolicy& policy, const Value* value,
     std::map<ValueId, ::dml::Expression>& expressions) {
   uint32_t index = input_resources.size();
   input_resources.push_back(external_objects_->FindResource(value->id));
@@ -257,67 +257,27 @@ ValueId Runtime::CreateInputTensorExpression(
   UINT tensor_sizes[4] = {shape.b, shape.c, shape.h, shape.w};
   ::dml::TensorDesc::Dimensions dimensions(std::begin(tensor_sizes),
                                            std::end(tensor_sizes));
-  auto output = ::dml::InputTensor(
-      scope, index,
-      ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, dimensions));
+  auto output =
+      ::dml::InputTensor(scope, index,
+                         ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, flags,
+                                           dimensions, policy));
 
   expressions[value->id] = output;
   return value->id;
 }
 
 ::dml::Expression Runtime::CreateConstInputTensorExpression(
-    const uint8_t* data, uint32_t size, ::dml::Scope& scope,
+    ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+    const ::dml::TensorPolicy& policy, const uint8_t* data, uint32_t size,
     ::dml::TensorDesc::Dimensions& dimensions)
 {
   uint32_t index = input_resources.size();
   D3DResource* resource = AllocateConstObject(data, size);
   input_resources.push_back(resource);
 
-  return ::dml::InputTensor(
-      scope, index,
-      ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, dimensions));
-}
-
-::dml::Expression Concat(::dml::Span<const ::dml::Expression> inputs, uint32_t axis) {
-  assert(!inputs.empty());
-
-  ::dml::detail::GraphBuilder* builder = inputs[0].Impl()->GetGraphBuilder();
-  DML_TENSOR_DATA_TYPE dataType = inputs[0].Impl()->GetOutputDesc().dataType;
-
-  ::dml::TensorDimensions outputSizes = inputs[0].Impl()->GetOutputDesc().sizes;
-  outputSizes[axis] = 0;
-
-  std::vector<::dml::TensorDesc> inputTensors;
-  inputTensors.reserve(inputs.size());
-
-  std::vector<DML_TENSOR_DESC> inputDescs;
-  inputDescs.reserve(inputs.size());
-
-  std::vector<::dml::detail::NodeOutput*> inputNodes;
-  inputNodes.reserve(inputs.size());
-
-  for (::dml::Expression input : inputs) {
-    inputTensors.push_back(input.Impl()->GetOutputDesc());
-    ::dml::TensorDesc& inputTensor = inputTensors.back();
-    outputSizes[axis] += inputTensor.sizes[axis];
-    inputDescs.push_back(*inputTensor.AsPtr<DML_TENSOR_DESC>());
-    inputNodes.push_back(input.Impl());
-  }
-
-  ::dml::TensorDesc outputTensor(dataType, std::move(outputSizes), builder->GetTensorPolicy());
-
-  DML_JOIN_OPERATOR_DESC desc = {};
-  desc.Axis = axis;
-  desc.InputCount = static_cast<uint32_t>(inputDescs.size());
-  desc.InputTensors = inputDescs.data();
-  desc.OutputTensor = outputTensor.AsPtr<DML_TENSOR_DESC>();
-
-  ::dml::detail::NodeID node =
-      builder->CreateOperatorNode(DML_OPERATOR_JOIN, &desc, inputNodes);
-  ::dml::detail::NodeOutput* output =
-      builder->CreateNodeOutput(node, 0, std::move(outputTensor));
-
-  return output;
+  return ::dml::InputTensor(scope, index,
+                            ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32,
+                                              flags, dimensions, policy));
 }
 
 ValueId Runtime::CreateConcatExpression(
@@ -331,7 +291,6 @@ ValueId Runtime::CreateConcatExpression(
                                        expressions[input_values[1]->id]};
       
   auto output = ::dml::Join(::dml::Span<const ::dml::Expression>(inputs),
-//  auto output = Concat(::dml::Span<const ::dml::Expression>{inputs},
                             static_cast<uint32_t>(attr.axis));
 
   expressions[output_values[0]->id] = output;
@@ -339,7 +298,9 @@ ValueId Runtime::CreateConcatExpression(
 }
 
 ValueId Runtime::CreateConvolution2DExpression(
-    const GraphFloat32& graph, const Node& node, ::dml::Scope& scope,
+    ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+    const ::dml::TensorPolicy& policy, const GraphFloat32& graph,
+    const Node& node,
     std::map<ValueId, ::dml::Expression>& expressions) {
   auto inputs = graph.FindInputs(node.id);
   auto outputs = graph.FindOutputs(node.id);
@@ -348,33 +309,16 @@ ValueId Runtime::CreateConvolution2DExpression(
   // Input Expression
   auto input = expressions[inputs[0]->id];
 
-#if 1
   // Weights Expression
   const auto& weights_shape = attr.weights.shape;
-  UINT elements_count =
-      weights_shape.o * weights_shape.i * weights_shape.h * weights_shape.w;
-  std::vector<float> gpu_data;
-  gpu_data.reserve(elements_count);
-  for (uint32_t o = 0; o < weights_shape.o; o++) {
-    for (uint32_t h = 0; h < weights_shape.h; h++) {
-      for (uint32_t w = 0; w < weights_shape.w; w++) {
-        for (uint32_t i = 0; i < weights_shape.i; i++) {
-          uint32_t idx =
-              w + h * weights_shape.w + i * weights_shape.h * weights_shape.w +
-              o * weights_shape.i * weights_shape.h * weights_shape.w;
-          gpu_data.push_back(attr.weights.data[idx]);
-        }
-      }
-    }
-  }
-
   UINT weights_tensor_sizes[4] = {weights_shape.o, weights_shape.i,
                                   weights_shape.h, weights_shape.w};
   ::dml::TensorDesc::Dimensions weights_dimensions(
       std::begin(weights_tensor_sizes), std::end(weights_tensor_sizes));
   auto filter = CreateConstInputTensorExpression(
+      scope, flags, policy,
       reinterpret_cast<const uint8_t*>(attr.weights.data.data()),
-      attr.weights.data.size() * sizeof(float), scope, weights_dimensions);
+      attr.weights.data.size() * sizeof(float), weights_dimensions);
 
   // Bias Expression
   const auto& bias_shape = attr.bias.shape;
@@ -382,8 +326,9 @@ ValueId Runtime::CreateConvolution2DExpression(
   ::dml::TensorDesc::Dimensions bias_dimensions(std::begin(bias_tensor_sizes),
                                                 std::end(bias_tensor_sizes));
   auto bias = CreateConstInputTensorExpression(
+      scope, flags, policy,
       reinterpret_cast<const uint8_t*>(attr.bias.data.data()),
-      attr.bias.data.size() * sizeof(float), scope, bias_dimensions);
+      attr.bias.data.size() * sizeof(float), bias_dimensions);
 
   // Parameters
   const uint32_t strides[2] = {attr.strides.h, attr.strides.w};
@@ -400,9 +345,7 @@ ValueId Runtime::CreateConvolution2DExpression(
                     .StartPadding(::dml::Span<const uint32_t>{start_padding})
                     .EndPadding(::dml::Span<const uint32_t>{end_padding})
                     .Build();
-#else
-  auto output = ::dml::Identity(input);
-#endif
+
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;
 }
@@ -424,13 +367,9 @@ ValueId Runtime::CreatePadExpression(
                                    attr.appended.h, attr.appended.w};
 
   auto input = expressions[inputs[0]->id];
-#if 1
   auto output = ::dml::Padding(input, padding_mode, 0.0f,
                                ::dml::Span<const uint32_t>{start_padding},
                                ::dml::Span<const uint32_t>{end_padding});
-#else
-  auto output = ::dml::Identity(input);
-#endif
 
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;
@@ -444,11 +383,7 @@ ValueId Runtime::CreateReLUExpression(
   auto attr = absl::any_cast<ReLUAttributes>(node.operation.attributes);
 
   auto input = expressions[inputs[0]->id];
-#if 1
   auto output = ::dml::ActivationRelu(input);
-#else
-  auto output = ::dml::Identity(input);
-#endif
 
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;
@@ -541,7 +476,6 @@ absl::Status Runtime::Execute() {
     binding_table->BindPersistentResource(&binding_desc);
   }
 
-#if 0
   std::vector<DML_BUFFER_BINDING> buffer_bindings;
   std::vector<DML_BINDING_DESC> input_bindings;
   buffer_bindings.reserve(input_resources.size());
@@ -554,39 +488,6 @@ absl::Status Runtime::Execute() {
     input_bindings.push_back(input_binding_desc);
   }
   binding_table->BindInputs(input_bindings.size(), input_bindings.data());
-#else
-  DML_BUFFER_BINDING buffer_bindings[] = {
-    {input_resources[0]->Get()},
-    {input_resources[1]->Get(), 0, input_resources[1]->Get()->GetDesc().Width},
-    {input_resources[2]->Get(), 0, input_resources[2]->Get()->GetDesc().Width},
-    {input_resources[3]->Get(), 0, input_resources[3]->Get()->GetDesc().Width},
-    {input_resources[4]->Get(), 0, input_resources[4]->Get()->GetDesc().Width},
-    {input_resources[5]->Get(), 0, input_resources[5]->Get()->GetDesc().Width},
-    {input_resources[6]->Get(), 0, input_resources[6]->Get()->GetDesc().Width},
-    {input_resources[7]->Get(), 0, input_resources[7]->Get()->GetDesc().Width},
-    {input_resources[8]->Get(), 0, input_resources[8]->Get()->GetDesc().Width},
-    {input_resources[9]->Get(), 0, input_resources[9]->Get()->GetDesc().Width},
-    {input_resources[10]->Get(), 0, input_resources[10]->Get()->GetDesc().Width},
-    {input_resources[11]->Get(), 0, input_resources[11]->Get()->GetDesc().Width},
-    {input_resources[12]->Get(), 0, input_resources[12]->Get()->GetDesc().Width}
-  };
-  DML_BINDING_DESC input_bindings[] = {
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[0]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[1]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[2]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[3]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[4]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[5]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[6]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[7]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[8]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[9]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[10]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[11]},
-      {DML_BINDING_TYPE_BUFFER, &buffer_bindings[12]},
-  };
-  binding_table->BindInputs(ARRAYSIZE(input_bindings), input_bindings);
-#endif
 
   for (auto resource : output_resources) {
     DML_BUFFER_BINDING output_buffer_binding{resource->Get(), 0,
