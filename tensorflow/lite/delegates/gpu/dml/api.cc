@@ -38,6 +38,13 @@ namespace tflite {
 namespace gpu {
 namespace dml {
 namespace {
+absl::Status WrapResource(DirectMlResource resource,
+                          D3DResource* d3d_resource) {
+  int64_t size_bytes;
+  RETURN_IF_ERROR(GetResourceSize(resource.resource, &size_bytes));
+  *d3d_resource = D3DResource(resource.resource, size_bytes);
+  return absl::OkStatus();
+}
 
 absl::Status MaybeAllocateD3D12Resource(DMLDevice* device,
                                         const TensorObjectDef& def,
@@ -145,13 +152,13 @@ class DefaultTensorTie : public TensorTie {
     const auto& internal_def = def().internal_def.object_def;
     return (external_def.object_type == internal_def.object_type &&
             external_def.data_type == internal_def.data_type &&
-            external_def.data_layout == internal_def.data_layout) ||
+            external_def.data_layout == internal_def.data_layout)/* ||
            // Check for equivalent layouts that have the same size.
            (external_def.object_type == internal_def.object_type &&
             external_def.data_type == internal_def.data_type &&
             external_def.data_layout == DataLayout::BHWC &&
             internal_def.data_layout == DataLayout::DHWC4 &&
-            def().external_def.dimensions.c == 4);
+            def().external_def.dimensions.c == 4)*/;
   }
 
   absl::Status Init(TensorObjectConverterBuilder* converter_builder,
@@ -199,7 +206,8 @@ class DefaultTensorTie : public TensorTie {
     switch (d.object_def.object_type) {
       case gpu::ObjectType::DIRECTML_RESOURCE: {
         D3DResource resource;
-        RETURN_IF_ERROR(MaybeAllocateD3D12Resource(env->GetDevicePtr(), d, def().access_type, &resource));
+        RETURN_IF_ERROR(MaybeAllocateD3D12Resource(
+            env->GetDevicePtr(), d, def().access_type, &resource));
         internal_obj_ = DirectMlResource{resource.Get()};
         RETURN_IF_ERROR(
             objects_->RegisterResource(def().id, std::move(resource)));
@@ -213,9 +221,6 @@ class DefaultTensorTie : public TensorTie {
   }
 
   absl::Status MaybeAllocateExternalObject(Environment* env) {
-#if 1
-    return absl::InternalError("Unexpected object type");
-#else
     const TensorObjectDef& d = def().external_def;
     if (d.object_def.user_provided) {
       return absl::OkStatus();
@@ -229,17 +234,18 @@ class DefaultTensorTie : public TensorTie {
         break;
       }
       case ObjectType::DIRECTML_RESOURCE: {
-        RETURN_IF_ERROR(MaybeAllocateD3D12Resource(env->GetDevicePtr(), d,
-                                                   &external_resource_));
+        RETURN_IF_ERROR(MaybeAllocateD3D12Resource(
+            env->GetDevicePtr(), d, def().access_type, &external_resource_));
         external_obj_ = DirectMlResource{external_resource_.Get()};
-//        D3DResource resource;
+        D3DResource bbb;
+        RETURN_IF_ERROR(
+            WrapResource(DirectMlResource{external_resource_.Get()}, &bbb));
         break;
       }
       default:
         return absl::InternalError("Unexpected object type");
     }
     return absl::OkStatus();
-#endif
   }
 
   ObjectManager* objects_;
@@ -256,9 +262,9 @@ class DefaultTensorTie : public TensorTie {
   std::unique_ptr<TensorObjectConverter> converter_from_;
 };
 
-// Copies data to intermediate DirectML buffer and then does two step conversion.
+// Copies data to intermediate DirectML resource and then does two step conversion.
 // It drives the following cases were one-step conversion is not supported:
-//   - CPU BHWC -> CL buffer BHWC -> CL texture DHWC4.
+//   - CPU BHWC -> DML resource BHWC -> DML resource DHWC4.
 class TwoStepTensorTie : public TensorTie {
  public:
   explicit TwoStepTensorTie(const TensorTieDef& def) : TensorTie(def) {}
@@ -305,11 +311,11 @@ class TwoStepTensorTie : public TensorTie {
     TensorTieDef outer_def;
     outer_def.external_def = def.external_def;
     outer_def.internal_def = def.external_def;
-    outer_def.internal_def.object_def.object_type =
-        ObjectType::DIRECTML_RESOURCE;
+    outer_def.internal_def.object_def.object_type = ObjectType::DIRECTML_RESOURCE;
     outer_def.internal_def.object_def.user_provided = true;
 
     TensorTieDef inner_def;
+#if 1
     inner_def.id = def.id;
     // Should not allocate external object.
     inner_def.external_def = outer_def.internal_def;
@@ -318,11 +324,15 @@ class TwoStepTensorTie : public TensorTie {
     inner_def.internal_def.dimensions = inner_def.external_def.dimensions;
     inner_def.internal_def.object_def.data_type = DataType::FLOAT32;
     inner_def.internal_def.object_def.data_layout = DataLayout::DHWC4;
-    inner_def.internal_def.object_def.object_type =
-        ObjectType::DIRECTML_RESOURCE;
+    inner_def.internal_def.object_def.object_type = ObjectType::DIRECTML_RESOURCE;
     // It may allocate another internal object and should register it to
     // ObjectManager.
     inner_def.internal_def.object_def.user_provided = false;
+#else
+    inner_def.external_def = outer_def.internal_def;
+    inner_def.external_def.object_def.user_provided = false;
+    inner_def.internal_def = def.internal_def;
+#endif
     return std::make_pair(outer_def, inner_def);
   }
 
@@ -565,6 +575,7 @@ class InferenceBuilderImpl : public InferenceBuilder {
     std::vector<TensorTieDef> links;
     links.reserve(values.size());
     for (const auto& value : values) {
+#if 1
       TensorObjectDef external_def;
       // So far the compiler always forces inputs and outputs to be in the fixed
       // format.
@@ -585,6 +596,12 @@ class InferenceBuilderImpl : public InferenceBuilder {
       AccessType access =
           graph_.IsGraphInput(value->id) ? AccessType::READ : AccessType::WRITE;
       links.push_back({value->id, access, internal_def, external_def});
+#else
+      TensorObjectDef def = TensorToDef(*context_->GetTensor(value->id));
+      AccessType access =
+          graph.IsGraphInput(value->id) ? AccessType::READ : AccessType::WRITE;
+      links.push_back({value->id, access, def, def});
+#endif
     }
     return links;
   }

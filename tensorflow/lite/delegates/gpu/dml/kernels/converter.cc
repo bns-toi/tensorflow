@@ -21,6 +21,7 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/common/util.h"
 #include "tensorflow/lite/delegates/gpu/dml/d3d_resource.h"
+#include "tensorflow/lite/delegates/gpu/dml/d3d_shader.h"
 
 namespace tflite {
 namespace gpu {
@@ -37,6 +38,8 @@ absl::Status WrapResource(DirectMlResource resource,
 
 class DirectMllConverterImpl : public TensorObjectConverter {
  public:
+  explicit DirectMllConverterImpl(DMLDevice* device)
+      : device_(device) {}
   virtual absl::Status Init(const TensorObjectDef& input_def,
                             const TensorObjectDef& output_def,
                             Environment* environment) = 0;
@@ -45,12 +48,30 @@ class DirectMllConverterImpl : public TensorObjectConverter {
   DMLDevice* device_ = nullptr;
 };
 
+class DirectMllShaderConverterImpl : public DirectMllConverterImpl {
+ public:
+  explicit DirectMllShaderConverterImpl(DMLDevice* device)
+      : DirectMllConverterImpl(device) {}
+
+  absl::Status Dispatch(const DirectMlResource* input,
+                        const DirectMlResource* output) {
+    return shader.Dispatch(device_, shape_.w, shape_.h, input, output);
+  }
+
+ protected:
+  D3DShader shader;
+  BHWC shape_;
+};
+
 bool IsSupportedDataType(DataType type) {
   return /* == DataType::FLOAT16 || */type == DataType::FLOAT32;
 }
 
-class FromTensorConverter : public DirectMllConverterImpl {
+class FromTensorConverter : public DirectMllShaderConverterImpl {
  public:
+  explicit FromTensorConverter(DMLDevice* device)
+      : DirectMllShaderConverterImpl(device) {}
+
   static bool IsSupported(const ObjectDef& input, const ObjectDef& output) {
     return IsSupportedDataType(input.data_type) &&
            IsSupportedDataType(output.data_type) &&
@@ -65,8 +86,33 @@ class FromTensorConverter : public DirectMllConverterImpl {
   absl::Status Init(const TensorObjectDef& input_def,
                     const TensorObjectDef& output_def,
                     Environment* environment) final {
-    //return absl::OkStatus();
-    return absl::InvalidArgumentError("Missing input in from_tensor converter");
+    shape_ = BHWC(input_def.dimensions.b, input_def.dimensions.h,
+                  input_def.dimensions.w, input_def.dimensions.c);
+
+    return shader.Compile(device_, R"(
+    Buffer<half> input : register(t0);
+    RWBuffer<half> output : register(u0);
+
+    cbuffer cbCS {
+      uint height;
+      uint width;
+    };
+
+    [numthreads(32, 16, 1)]
+    void main(uint3 blockID : SV_GroupID, uint3 threadID : SV_GroupThreadID) {
+      uint x = blockID.x * 32 + threadID.x;
+      uint y = blockID.y * 16 + threadID.y;
+      if (x < width && y < height) {
+        uint index = width * y + x;
+        uint planeSize = height * width;
+        output[index * 4] = input[index];
+        output[index * 4 + 1] = input[index + planeSize];
+        output[index * 4 + 2] = input[index + planeSize * 2];
+        output[index * 4 + 3] = input[index + planeSize * 3];
+      }
+    })");
+//    return absl::OkStatus();
+//    return absl::InvalidArgumentError("Missing input in from_tensor converter");
   }
 
   absl::Status Convert(const TensorObject& input_obj,
@@ -76,12 +122,30 @@ class FromTensorConverter : public DirectMllConverterImpl {
       return absl::InvalidArgumentError(
           "Missing output in from_tensor converter");
     }
-    return absl::InvalidArgumentError("Missing input in from_tensor converter");
+    auto input = absl::get_if<DirectMlResource>(&input_obj);
+    if (!input || !input->resource) {
+      return absl::InvalidArgumentError("Missing input in converter");
+    }
+    if (input->resource == output->resource) {
+      return absl::InvalidArgumentError("Can not execute inplace conversion");
+    }
+
+    return Dispatch(input, output);
+
+/*    D3DResource input_resource, output_resource;
+    RETURN_IF_ERROR(WrapResource(*input, &input_resource));
+    RETURN_IF_ERROR(WrapResource(*output, &output_resource));
+    return output_resource.Copy(device_, input_resource);*/
+//    return absl::OkStatus();
+//    return absl::InvalidArgumentError("Missing input in from_tensor converter");
   }
 };
 
-class ToTensorConverter : public DirectMllConverterImpl {
+class ToTensorConverter : public DirectMllShaderConverterImpl {
  public:
+  explicit ToTensorConverter(DMLDevice* device)
+      : DirectMllShaderConverterImpl(device) {}
+
   static bool IsSupported(const ObjectDef& input, const ObjectDef& output) {
     return IsSupportedDataType(input.data_type) &&
            IsSupportedDataType(output.data_type) &&
@@ -96,23 +160,67 @@ class ToTensorConverter : public DirectMllConverterImpl {
   absl::Status Init(const TensorObjectDef& input_def,
                     const TensorObjectDef& output_def,
                     Environment* environment) final {
-    //return absl::OkStatus();
-    return absl::InvalidArgumentError("Missing input in to_tensor converter");
+    shape_ = BHWC(input_def.dimensions.b, input_def.dimensions.h,
+                  input_def.dimensions.w, input_def.dimensions.c);
+
+    return shader.Compile(device_, R"(
+    Buffer<half> input : register(t0);
+    RWBuffer<half> output : register(u0);
+
+    cbuffer cbCS {
+      uint height;
+      uint width;
+    };
+
+    [numthreads(32, 16, 1)]
+    void main(uint3 blockID : SV_GroupID, uint3 threadID : SV_GroupThreadID) {
+      uint x = blockID.x * 32 + threadID.x;
+      uint y = blockID.y * 16 + threadID.y;
+      if (x < width && y < height) {
+        uint index = width * y + x;
+        uint planeSize = height * width;
+        output[index] = input[index * 4];
+        output[index + planeSize] = input[index * 4 + 1];
+        output[index + planeSize * 2] = input[index * 4 + 2];
+        output[index + planeSize * 3] = input[index * 4 + 3];
+      }
+    })");
+//    return absl::OkStatus();
+//    return absl::InvalidArgumentError("Missing input in to_tensor converter");
   }
 
   absl::Status Convert(const TensorObject& input_obj,
                        const TensorObject& output_obj) override {
+    auto output = absl::get_if<DirectMlResource>(&output_obj);
+    if (!output || !output->resource) {
+      return absl::InvalidArgumentError(
+          "Missing output in from_tensor converter");
+    }
     auto input = absl::get_if<DirectMlResource>(&input_obj);
     if (!input || !input->resource) {
-      return absl::InvalidArgumentError("Missing input in to_tensor converter");
+      return absl::InvalidArgumentError("Missing input in converter");
     }
-    return absl::InvalidArgumentError("Missing input in to_tensor converter");
+    if (input->resource == output->resource) {
+      return absl::InvalidArgumentError("Can not execute inplace conversion");
+    }
+
+    return Dispatch(input, output);
+
+/*    D3DResource input_resource, output_resource;
+    RETURN_IF_ERROR(WrapResource(*input, &input_resource));
+    RETURN_IF_ERROR(WrapResource(*output, &output_resource));
+    return output_resource.Copy(device_, input_resource);*/
+//    return absl::OkStatus();
+//    return absl::InvalidArgumentError("Missing input in to_tensor converter");
   }
 };
 
 // Copies data from/to CPU into a tensor.
 class CpuCopier : public DirectMllConverterImpl {
  public:
+  explicit CpuCopier(DMLDevice* device)
+      : DirectMllConverterImpl(device) {}
+
   static bool IsSupported(const ObjectDef& input, const ObjectDef& output) {
     return input.data_type == output.data_type &&
            input.data_layout == output.data_layout &&
@@ -125,7 +233,6 @@ class CpuCopier : public DirectMllConverterImpl {
   absl::Status Init(const TensorObjectDef& input_def,
                     const TensorObjectDef& output_def,
                     Environment* environment) final {
-    device_ = environment->GetDevicePtr();
     return absl::OkStatus();
   }
 
@@ -177,14 +284,15 @@ class DirectMlTensorConverterBuilder : public TensorObjectConverterBuilder {
     std::unique_ptr<DirectMllConverterImpl> impl;
     const auto& input_def = input.object_def;
     const auto& output_def = output.object_def;
+    DMLDevice* device = environment_->GetDevicePtr();
 /*    if (TrivialCopier::IsSupported(input_def, output_def)) {
       impl = absl::make_unique<TrivialCopier>();
     } else*/ if (CpuCopier::IsSupported(input_def, output_def)) {
-      impl = absl::make_unique<CpuCopier>();
+      impl = absl::make_unique<CpuCopier>(device);
     } else if (FromTensorConverter::IsSupported(input_def, output_def)) {
-      impl = absl::make_unique<FromTensorConverter>();
+      impl = absl::make_unique<FromTensorConverter>(device);
     } else if (ToTensorConverter::IsSupported(input_def, output_def)) {
-      impl = absl::make_unique<ToTensorConverter>();
+      impl = absl::make_unique<ToTensorConverter>(device);
     } else {
       return absl::UnimplementedError("Unsupported conversion");
     }

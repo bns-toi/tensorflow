@@ -19,16 +19,9 @@ cc_library(
     hdrs = ["converter.h"],
     copts = TFLITE_GPU_DEFAULT_COPTS,
     deps = [
-        #":util",
         "//tensorflow/lite/delegates/gpu:dml_spi",
-        #"//tensorflow/lite/delegates/gpu/cl:cl_command_queue",
-        #"//tensorflow/lite/delegates/gpu/cl:cl_errors",
-        #"//tensorflow/lite/delegates/gpu/cl:environment",
-        #"//tensorflow/lite/delegates/gpu/cl:precision",
-        #"//tensorflow/lite/delegates/gpu/cl:tensor",
-        #"//tensorflow/lite/delegates/gpu/cl:tensor_type",
-        #"//tensorflow/lite/delegates/gpu/cl:cl_tensor_type_util",
         "//tensorflow/lite/delegates/gpu/common:util",
+        "//tensorflow/lite/delegates/gpu/dml:d3d_shader",
         "@dml_redist//:headers",
     ],
 )

@@ -50,6 +50,8 @@ class D3DResource {
   template <typename T>
   absl::Status Write(DMLDevice* device, absl::Span<const T> data);
 
+  absl::Status Copy(DMLDevice* device, const D3DResource& src_resource);
+
   ID3D12Resource* Get() const { return resource_ptr; }
   size_t bytes_size() const { return bytes_size_; }
 
@@ -60,6 +62,7 @@ class D3DResource {
 
   absl::Status ReadResource(DMLDevice* device, void* data) const;
   absl::Status WriteResource(DMLDevice* device, const void* data);
+  absl::Status CopyResource(DMLDevice* device, const D3DResource& src_resource);
 };
 
 absl::Status GetResourceSize(ID3D12Resource* resource, int64_t* size_bytes);

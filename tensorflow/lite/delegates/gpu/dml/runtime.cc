@@ -82,8 +82,8 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
 
   DML_TENSOR_FLAGS flags = DML_TENSOR_FLAG_NONE;
 //  flags |= DML_TENSOR_FLAG_OWNED_BY_DML;
-//  ::dml::TensorPolicy policy = ::dml::TensorPolicy::Default();
-  ::dml::TensorPolicy policy = ::dml::TensorPolicy::InterleavedChannel();
+  ::dml::TensorPolicy policy = ::dml::TensorPolicy::Default();
+//  ::dml::TensorPolicy policy = ::dml::TensorPolicy::InterleavedChannel();
   ::dml::Scope scope(device->dml_device.Get(), policy);
 
   std::map<ValueId, ::dml::Expression> expressions;
@@ -309,16 +309,36 @@ ValueId Runtime::CreateConvolution2DExpression(
   // Input Expression
   auto input = expressions[inputs[0]->id];
 
+#if 1
   // Weights Expression
   const auto& weights_shape = attr.weights.shape;
+
+  std::vector<float> gpu_data;
+  gpu_data.resize(weights_shape.o * weights_shape.h * weights_shape.w *
+                   weights_shape.i);
+  for (uint32_t o = 0; o < weights_shape.o; o++) {
+    for (uint32_t h = 0; h < weights_shape.h; h++) {
+      for (uint32_t w = 0; w < weights_shape.w; w++) {
+        for (uint32_t i = 0; i < weights_shape.i; i++) {
+          uint32_t offset = o * weights_shape.i * weights_shape.h * weights_shape.w;
+          uint32_t idx = w + h * weights_shape.w;
+
+          gpu_data[offset + idx + i * weights_shape.h * weights_shape.w] =
+              attr.weights.data[offset + idx * weights_shape.i + i];
+        }
+      }
+    }
+  }
+
   UINT weights_tensor_sizes[4] = {weights_shape.o, weights_shape.i,
                                   weights_shape.h, weights_shape.w};
   ::dml::TensorDesc::Dimensions weights_dimensions(
       std::begin(weights_tensor_sizes), std::end(weights_tensor_sizes));
   auto filter = CreateConstInputTensorExpression(
-      scope, flags, policy,
-      reinterpret_cast<const uint8_t*>(attr.weights.data.data()),
-      attr.weights.data.size() * sizeof(float), weights_dimensions);
+      scope, flags, policy, reinterpret_cast<const uint8_t*>(gpu_data.data()),
+      gpu_data.size() * sizeof(float), weights_dimensions);
+  //      reinterpret_cast<const uint8_t*>(attr.weights.data.data()),
+//      attr.weights.data.size() * sizeof(float), weights_dimensions);
 
   // Bias Expression
   const auto& bias_shape = attr.bias.shape;
@@ -345,6 +365,9 @@ ValueId Runtime::CreateConvolution2DExpression(
                     .StartPadding(::dml::Span<const uint32_t>{start_padding})
                     .EndPadding(::dml::Span<const uint32_t>{end_padding})
                     .Build();
+#else
+  auto output = ::dml::Identity(input);
+#endif
 
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;
@@ -367,9 +390,13 @@ ValueId Runtime::CreatePadExpression(
                                    attr.appended.h, attr.appended.w};
 
   auto input = expressions[inputs[0]->id];
+#if 1
   auto output = ::dml::Padding(input, padding_mode, 0.0f,
                                ::dml::Span<const uint32_t>{start_padding},
                                ::dml::Span<const uint32_t>{end_padding});
+#else
+  auto output = ::dml::Identity(input);
+#endif
 
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;
@@ -383,7 +410,11 @@ ValueId Runtime::CreateReLUExpression(
   auto attr = absl::any_cast<ReLUAttributes>(node.operation.attributes);
 
   auto input = expressions[inputs[0]->id];
+#if 1
   auto output = ::dml::ActivationRelu(input);
+#else
+  auto output = ::dml::Identity(input);
+#endif
 
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;

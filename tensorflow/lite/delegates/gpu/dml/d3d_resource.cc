@@ -88,6 +88,35 @@ absl::Status D3DResource::WriteResource(DMLDevice* device, const void* data) {
   return absl::OkStatus();
 }
 
+absl::Status D3DResource::CopyResource(DMLDevice* device,
+                                     const D3DResource& src_resource) {
+  D3D12_RESOURCE_BARRIER barrier[2] = {
+      CD3DX12_RESOURCE_BARRIER::Transition(
+        src_resource.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COPY_SOURCE),
+      CD3DX12_RESOURCE_BARRIER::Transition(
+        resource_ptr, D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+  };
+  device->command_list->ResourceBarrier(2, barrier);
+
+  device->command_list->CopyResource(resource_ptr, src_resource.Get());
+
+  device->CloseExecuteResetWait();
+
+  return absl::OkStatus();
+}
+
+
+absl::Status D3DResource::Copy(DMLDevice* device,
+                               const D3DResource& src_resource) {
+  if (src_resource.bytes_size() > bytes_size_) {
+    return absl::InvalidArgumentError(
+        "Copy to buffer failed. Source data is larger than buffer.");
+  }
+  return CopyResource(device, src_resource);
+}
+
 absl::Status CreateResource(DMLDevice* device,
                             AccessType access_type, UINT64 size,
                             D3DResource* d3d_resource) {
@@ -105,7 +134,6 @@ absl::Status CreateResource(DMLDevice* device,
   *d3d_resource = D3DResource(resource, size);
   return absl::OkStatus();
 }
-
 
 }  // namespace dml
 }  // namespace gpu

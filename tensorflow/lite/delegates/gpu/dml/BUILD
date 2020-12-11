@@ -66,11 +66,6 @@ cc_library(
     hdrs = ["environment.h"],
     deps = [
         ":dml_device",
-        #":precision",
-        #":program_cache",
-        #":tensor",
-        #":tensor_type",
-        #":util",
         "//tensorflow/lite/delegates/gpu/common:data_type",
         "//tensorflow/lite/delegates/gpu/common:shape",
         "//tensorflow/lite/delegates/gpu/common:status",
@@ -104,6 +99,23 @@ cc_library(
         "@dml_redist//:headers",
         "//third_party/dml:winadapter",
     ],
+)
+
+cc_library(
+    name = "d3d_shader",
+    srcs = ["d3d_shader.cc"],
+    hdrs = ["d3d_shader.h"],
+    copts = TFLITE_GPU_DEFAULT_COPTS,
+    deps = [
+        "//tensorflow/lite/delegates/gpu/common:status",
+        "//tensorflow/lite/delegates/gpu/common:types",
+        "//third_party/dml:dx_helpers",
+        "@dml_redist//:headers",
+        "//third_party/dml:winadapter",
+    ],
+	linkopts = [
+        "d3dcompiler.lib", 
+    ]
 )
 
 cc_library(
