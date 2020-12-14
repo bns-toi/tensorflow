@@ -138,7 +138,8 @@ class DelegateKernel {
     bool graph_is_destroyed;
     const int experimental_flags = delegate_->options().experimental_flags;
 #ifdef TFLITE_GPU_DML
-      RETURN_IF_ERROR(InitializeDirectMLApi(&graph, &builder));
+    const uint64_t device = delegate_->options().device;
+    RETURN_IF_ERROR(InitializeDirectMLApi(&graph, &builder, device));
 #else // TFLITE_GPU_DML
     if (experimental_flags & TFLITE_GPU_EXPERIMENTAL_FLAGS_CL_ONLY) {
 #ifdef TFLITE_GPU_CL
@@ -366,8 +367,10 @@ class DelegateKernel {
 
 #ifdef TFLITE_GPU_DML
   absl::Status InitializeDirectMLApi(GraphFloat32* graph,
-                                   std::unique_ptr<InferenceBuilder>* builder) {
+                                     std::unique_ptr<InferenceBuilder>* builder,
+                                     uint64_t device) {
     dml::InferenceEnvironmentOptions env_options;
+    env_options.device = reinterpret_cast<ID3D12Device*>(device);
     dml::InferenceEnvironmentProperties properties;
     RETURN_IF_ERROR(
         NewInferenceEnvironment(env_options, &dml_environment_, &properties));
@@ -502,6 +505,7 @@ TfLiteGpuDelegateOptionsV2 TfLiteGpuDelegateOptionsV2Default() {
   options.inference_priority3 = TFLITE_GPU_INFERENCE_PRIORITY_AUTO;
   options.experimental_flags = TFLITE_GPU_EXPERIMENTAL_FLAGS_NONE;
   options.max_delegated_partitions = 1;
+  options.device = 0;
   return options;
 }
 

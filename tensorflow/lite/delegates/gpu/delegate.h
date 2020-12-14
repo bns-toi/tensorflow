@@ -114,6 +114,9 @@ typedef struct {
   // This limits the maximum number of partitions to be delegated. By default,
   // it's set to 1 in TfLiteGpuDelegateOptionsV2Default().
   int32_t max_delegated_partitions;
+
+  // device pointer
+  uint64_t device;
 } TfLiteGpuDelegateOptionsV2;
 
 // Populates TfLiteGpuDelegateOptionsV2 as follows:
