@@ -55,7 +55,7 @@ absl::Status MaybeAllocateD3D12Resource(DMLDevice* device,
   }
 
   auto& dims = def.dimensions;
-  UINT tensor_sizes[4] = {dims.b, dims.h, dims.w, dims.c};
+  UINT tensor_sizes[4] = {dims.b, dims.c, dims.h, dims.w};
   ::dml::TensorDesc::Dimensions dimensions(std::begin(tensor_sizes), std::end(tensor_sizes));
   ::dml::TensorDesc desc;
   switch (def.object_def.data_type) {
@@ -71,7 +71,6 @@ absl::Status MaybeAllocateD3D12Resource(DMLDevice* device,
   };
 
   UINT64 tensor_buffer_size = desc.totalTensorSizeInBytes;
-
   return CreateResource(device, access_type, tensor_buffer_size, resource);
 }
 
@@ -630,8 +629,14 @@ class InferenceEnvironmentImpl : public InferenceEnvironment {
       : options_(options) {}
 
   absl::Status Init() {
+    properties_.is_directml_available = true;
+
     DMLDevice device;
-    RETURN_IF_ERROR(CreateDefaultGPUDevice(&device));
+    if (options_.device) {
+      device = DMLDevice(options_.device);
+    } else {
+      RETURN_IF_ERROR(CreateDefaultGPUDevice(&device));
+    }
 
     device.Init();
 

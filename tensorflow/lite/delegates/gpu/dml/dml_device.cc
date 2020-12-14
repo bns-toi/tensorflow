@@ -58,30 +58,32 @@ class UniqueHandle {
 DMLDevice::DMLDevice(
     Microsoft::WRL::ComPtr<IDXGIFactory4>& factory,
     Microsoft::WRL::ComPtr<IDXGIAdapter1>& adapter,
-    Microsoft::WRL::ComPtr<ID3D12Device>& device,
-    Microsoft::WRL::ComPtr<ID3D12CommandQueue>& command_queue_,
-    Microsoft::WRL::ComPtr<ID3D12CommandAllocator>& command_allocator_,
-    Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>& command_list_)
+    Microsoft::WRL::ComPtr<ID3D12Device>& device)
     : dxgi_factory(factory),
       dxgi_adapter(adapter),
       d3d_device_ptr(device),
-      command_queue_ptr(command_queue_),
-      command_allocator_ptr(command_allocator_),
-      command_list_ptr(command_list_),
-      d3d_device(d3d_device_ptr.Get()),
-      command_queue(command_queue_ptr.Get()),
-      command_allocator(command_allocator_ptr.Get()),
-      command_list(command_list_ptr.Get()) {}
+      d3d_device(d3d_device_ptr.Get()) {}
 
-DMLDevice::DMLDevice(ID3D12Device* device, ID3D12CommandQueue* command_queue_,
-                     ID3D12CommandAllocator* command_allocator_,
-                     ID3D12GraphicsCommandList* command_list_)
-    : d3d_device(device),
-      command_queue(command_queue_),
-      command_allocator(command_allocator_),
-      command_list(command_list_) {}
+DMLDevice::DMLDevice(ID3D12Device* device)
+    : d3d_device(device) {}
 
 void DMLDevice::Init() {
+  // create command queue
+  D3D12_COMMAND_QUEUE_DESC command_queue_desc = {};
+  command_queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+  command_queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
+  command_queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT;
+  command_queue_desc.NodeMask = 0;
+
+  DML_CHECK_SUCCEEDED(d3d_device->CreateCommandQueue(
+      &command_queue_desc, IID_PPV_ARGS(&command_queue)));
+
+  DML_CHECK_SUCCEEDED(d3d_device->CreateCommandAllocator(
+      D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocator)));
+
+  DML_CHECK_SUCCEEDED(d3d_device->CreateCommandList(
+      0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocator.Get(), nullptr,
+      IID_PPV_ARGS(&command_list)));
 
   // create DirectML device
   DML_CREATE_DEVICE_FLAGS dml_flags = DML_CREATE_DEVICE_FLAG_NONE;
@@ -91,6 +93,16 @@ void DMLDevice::Init() {
 
   DML_CHECK_SUCCEEDED(
       DMLCreateDevice(d3d_device, dml_flags, IID_PPV_ARGS(&dml_device)));
+
+  DML_FEATURE_QUERY_TENSOR_DATA_TYPE_SUPPORT fp16Query = { DML_TENSOR_DATA_TYPE_FLOAT16 };
+  DML_FEATURE_DATA_TENSOR_DATA_TYPE_SUPPORT fp16Supported = {};
+  DML_CHECK_SUCCEEDED(dml_device->CheckFeatureSupport(
+      DML_FEATURE_TENSOR_DATA_TYPE_SUPPORT, sizeof(fp16Query), &fp16Query,
+      sizeof(fp16Supported), &fp16Supported));
+
+ if (!fp16Supported.IsSupported) {
+    throw std::exception("FP16 data type support is required for this sample.");
+ }
 }
 
 absl::Status CreateDefaultGPUDevice(DMLDevice* result) {
@@ -132,40 +144,18 @@ absl::Status CreateDefaultGPUDevice(DMLDevice* result) {
   DML_CHECK_SUCCEEDED(D3D12CreateDevice(adapter.Get(), feature_level,
                                         IID_PPV_ARGS(&d3d_device)));
 
-  // create command queue
-  D3D12_COMMAND_QUEUE_DESC command_queue_desc = {};
-  command_queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-  command_queue_desc.Priority = D3D12_COMMAND_QUEUE_PRIORITY_NORMAL;
-  command_queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_DISABLE_GPU_TIMEOUT;
-  command_queue_desc.NodeMask = 0;
-
-  ComPtr<ID3D12CommandQueue> command_queue;
-  DML_CHECK_SUCCEEDED(d3d_device->CreateCommandQueue(
-      &command_queue_desc, IID_PPV_ARGS(&command_queue)));
-
-  ComPtr<ID3D12CommandAllocator> command_allocator;
-  DML_CHECK_SUCCEEDED(d3d_device->CreateCommandAllocator(
-      D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocator)));
-
-  ComPtr<ID3D12GraphicsCommandList> command_list;
-  DML_CHECK_SUCCEEDED(d3d_device->CreateCommandList(
-      0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocator.Get(), nullptr,
-      IID_PPV_ARGS(&command_list)));
-
   // construct
-  *result = DMLDevice(dxgi_factory, adapter, d3d_device, command_queue,
-                      command_allocator,
-                      command_list);
+  *result = DMLDevice(dxgi_factory, adapter, d3d_device);
   return absl::OkStatus();
 }
 
 void DMLDevice::CloseExecuteResetWait() {
   DML_CHECK_SUCCEEDED(command_list->Close());
 
-  ID3D12CommandList* command_lists[] = {command_list};
+  ID3D12CommandList* command_lists[] = {command_list.Get()};
   command_queue->ExecuteCommandLists(ARRAYSIZE(command_lists), command_lists);
 
-  DML_CHECK_SUCCEEDED(command_list->Reset(command_allocator, nullptr));
+  DML_CHECK_SUCCEEDED(command_list->Reset(command_allocator.Get(), nullptr));
 
   ComPtr<ID3D12Fence> fence;
   DML_CHECK_SUCCEEDED(

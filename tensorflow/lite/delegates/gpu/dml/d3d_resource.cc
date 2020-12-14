@@ -74,7 +74,7 @@ absl::Status D3DResource::WriteResource(DMLDevice* device, const void* data) {
   subresource_data.SlicePitch = subresource_data.RowPitch;
 
   // Upload the input tensor to the GPU.
-  ::UpdateSubresources(device->command_list, resource_ptr,
+  ::UpdateSubresources(device->command_list.Get(), resource_ptr,
                        upload_buffer.Get(),
                        0, 0, 1, &subresource_data);
 

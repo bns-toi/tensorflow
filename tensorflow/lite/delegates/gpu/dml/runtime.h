@@ -59,34 +59,33 @@ class Runtime {
       std::map<ValueId, ::dml::Expression>& expressions);
   ::dml::Expression CreateConstInputTensorExpression(
       ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
-      const ::dml::TensorPolicy& policy, const uint8_t* data, uint32_t size,
-      ::dml::TensorDesc::Dimensions& dimensions);
+      const ::dml::TensorPolicy& policy, const uint8_t* data,
+      DML_TENSOR_DATA_TYPE data_type, const UINT* sizes);
   ValueId CreateConcatExpression(
-      const GraphFloat32& graph, const Node& node,
+      const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateConvolution2DExpression(
       ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
       const ::dml::TensorPolicy& policy, const GraphFloat32& graph,
-      const Node& node,
+      const Node* node, const Node* activation_node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreatePadExpression(
-      const GraphFloat32& graph, const Node& node,
+      const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateReLUExpression(
-      const GraphFloat32& graph, const Node& node,
+      const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateSliceExpression(
-      const GraphFloat32& graph, const Node& node,
+      const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateClipExpression(
-      const GraphFloat32& graph, const Node& node,
-      std::map<ValueId, ::dml::Expression>& expressions,
-      float min_value, float max_value);
+      const GraphFloat32& graph, const Node* min_node, const Node* max_node,
+      std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateMaximumExpression(
-      const GraphFloat32& graph, const Node& node,
+      const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateMinimumExpression(
-      const GraphFloat32& graph, const Node& node,
+      const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
 };
 

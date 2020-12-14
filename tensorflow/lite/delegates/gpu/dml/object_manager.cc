@@ -38,6 +38,10 @@ void ObjectManager::RemoveResource(uint32_t id) {
   }
 }
 
+void ObjectManager::RemoveAllResource() {
+  resources_.clear();
+}
+
 D3DResource* ObjectManager::FindResource(uint32_t id) const {
   return id >= resources_.size() ? nullptr : resources_[id].get();
 }

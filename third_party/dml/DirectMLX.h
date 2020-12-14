@@ -46,8 +46,8 @@
 inline UINT64 DMLCalcBufferTensorSize(
     DML_TENSOR_DATA_TYPE dataType,
     UINT dimensionCount,
-    _In_reads_(dimensionCount) const UINT* sizes,
-    _In_reads_opt_(dimensionCount) const UINT* strides)
+    _In_reads_(dimensionCount) const uint32_t* sizes,
+    _In_reads_opt_(dimensionCount) const uint32_t* strides)
 {
     UINT elementSizeInBytes = 0;
     switch (dataType)

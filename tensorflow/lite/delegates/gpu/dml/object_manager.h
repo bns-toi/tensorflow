@@ -36,6 +36,7 @@ class ObjectManager {
   absl::Status RegisterResource(uint32_t id, D3DResource resource);
 
   void RemoveResource(uint32_t id);
+  void RemoveAllResource();
 
   // Return a permanent pointer to a resource for the given id or nullptr.
   D3DResource* FindResource(uint32_t id) const;

@@ -46,6 +46,7 @@ class InferenceEnvironment {
 };
 
 struct InferenceEnvironmentOptions {
+  ID3D12Device* device = nullptr;
 };
 
 // Creates a new DirectML environment that needs to stay around until all

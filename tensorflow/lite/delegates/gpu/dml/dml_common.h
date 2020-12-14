@@ -56,6 +56,8 @@ limitations under the License.
 #include "third_party/dml/DirectMLX.h"
 #include "third_party/dml/d3dx12.h"
 
+#define DML_DATA_TYPE_HALF 0
+
 // When building for Windows, this include will statically assert that the declared IIDs
 // match those found in the Windows SDK.
 //#include "dxguids.h"

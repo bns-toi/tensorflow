@@ -111,8 +111,6 @@ class FromTensorConverter : public DirectMllShaderConverterImpl {
         output[index * 4 + 3] = input[index + planeSize * 3];
       }
     })");
-//    return absl::OkStatus();
-//    return absl::InvalidArgumentError("Missing input in from_tensor converter");
   }
 
   absl::Status Convert(const TensorObject& input_obj,
@@ -131,13 +129,6 @@ class FromTensorConverter : public DirectMllShaderConverterImpl {
     }
 
     return Dispatch(input, output);
-
-/*    D3DResource input_resource, output_resource;
-    RETURN_IF_ERROR(WrapResource(*input, &input_resource));
-    RETURN_IF_ERROR(WrapResource(*output, &output_resource));
-    return output_resource.Copy(device_, input_resource);*/
-//    return absl::OkStatus();
-//    return absl::InvalidArgumentError("Missing input in from_tensor converter");
   }
 };
 
@@ -185,8 +176,6 @@ class ToTensorConverter : public DirectMllShaderConverterImpl {
         output[index + planeSize * 3] = input[index * 4 + 3];
       }
     })");
-//    return absl::OkStatus();
-//    return absl::InvalidArgumentError("Missing input in to_tensor converter");
   }
 
   absl::Status Convert(const TensorObject& input_obj,
@@ -205,13 +194,6 @@ class ToTensorConverter : public DirectMllShaderConverterImpl {
     }
 
     return Dispatch(input, output);
-
-/*    D3DResource input_resource, output_resource;
-    RETURN_IF_ERROR(WrapResource(*input, &input_resource));
-    RETURN_IF_ERROR(WrapResource(*output, &output_resource));
-    return output_resource.Copy(device_, input_resource);*/
-//    return absl::OkStatus();
-//    return absl::InvalidArgumentError("Missing input in to_tensor converter");
   }
 };
 

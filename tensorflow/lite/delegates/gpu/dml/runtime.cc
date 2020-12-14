@@ -15,6 +15,13 @@ limitations under the License.
 
 #include "tensorflow/lite/delegates/gpu/common/operations.h"
 #include "tensorflow/lite/delegates/gpu/dml/runtime.h"
+#include "tensorflow/lite/delegates/gpu/dml/Float16Compressor.h"
+
+// Let DirectML manage the data in the weight tensors. This can be faster on
+// some hardware.
+#define DML_MANAGED_WEIGHTS 1
+
+#define OPTIMIZE_NODE 1
 
 using Microsoft::WRL::ComPtr;
 
@@ -81,7 +88,9 @@ Runtime::Runtime(DMLDevice* device_, const ObjectManager* external_objects)
 absl::Status Runtime::Compile(const GraphFloat32& graph) {
 
   DML_TENSOR_FLAGS flags = DML_TENSOR_FLAG_NONE;
-//  flags |= DML_TENSOR_FLAG_OWNED_BY_DML;
+#if DML_MANAGED_WEIGHTS
+  flags |= DML_TENSOR_FLAG_OWNED_BY_DML;
+#endif // DML_MANAGED_WEIGHTS
   ::dml::TensorPolicy policy = ::dml::TensorPolicy::Default();
 //  ::dml::TensorPolicy policy = ::dml::TensorPolicy::InterleavedChannel();
   ::dml::Scope scope(device->dml_device.Get(), policy);
@@ -100,19 +109,29 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
   }
 
   std::vector<Node*> graph_nodes = graph.nodes();
-  for (int i = 0; i < graph_nodes.size(); ++i) {
-    const Node& node = *graph_nodes[i];
-    auto inputs = graph.FindInputs(node.id);
-    auto outputs = graph.FindOutputs(node.id);
+  const uint32_t num_graph_node = graph_nodes.size();
+  for (uint32_t i = 0; i < num_graph_node; ++i) {
+    const Node* node = graph_nodes[i];
+    const Node* next_node =
+        (i + 1) < num_graph_node ? graph_nodes[i + 1] : nullptr;
 
-    auto op_type = OperationTypeFromString(node.operation.type);
+    OperationType op_type = OperationTypeFromString(node->operation.type);
+    OperationType next_op_type =
+        next_node ? OperationTypeFromString(next_node->operation.type)
+                  : OperationType::UNKNOWN;
     switch (op_type) {
       case OperationType::CONCAT: {
         last_output = CreateConcatExpression(graph, node, expressions);
       } break;
       case OperationType::CONVOLUTION_2D: {
-        last_output = CreateConvolution2DExpression(scope, flags, policy, graph,
-                                                    node, expressions);
+        const Node* activation_node = nullptr;
+#if OPTIMIZE_NODE
+        if (next_op_type == OperationType::RELU) {
+          activation_node = next_node;
+          i++;
+        }
+#endif // OPTIMIZE_NODE
+        last_output = CreateConvolution2DExpression(scope, flags, policy, graph, node, activation_node, expressions);
       } break;
       case OperationType::PAD: {
         last_output = CreatePadExpression(graph, node, expressions);
@@ -127,18 +146,29 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
         last_output = CreateMaximumExpression(graph, node, expressions);
       } break;
       case OperationType::MINIMUM: {
-        last_output = CreateMinimumExpression(graph, node, expressions);
+#if OPTIMIZE_NODE
+        if (next_op_type == OperationType::MAXIMUM) {
+          i++;
+          last_output = CreateClipExpression(graph, node, next_node, expressions);
+        } else
+#endif  // OPTIMIZE_NODE
+        {
+          last_output = CreateMinimumExpression(graph, node, expressions);
+        }
       } break;
       default:
         return absl::UnimplementedError(absl::StrCat(
-            "No support of ", node.operation.type, " with this parameters"));
+            "No support of ", node->operation.type, " with this parameters"));
     }
   }
 
   auto output = expressions[last_output];
 
-//  DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION;
+#if DML_DATA_TYPE_HALF
+  DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION;
+#else // DML_DATA_TYPE_HALF
   DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_NONE;
+#endif // DML_DATA_TYPE_HALF
   compiled_operator = scope.Compile(execution_flags, {output});
 
   IDMLCompiledOperator* compiled_operators[] = {compiled_operator.Get()};
@@ -194,6 +224,26 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
     initialize_temporary_buffer = temporary_buffer;
   }
 
+#if DML_MANAGED_WEIGHTS
+  std::vector<DML_BUFFER_BINDING> buffer_bindings;
+  const uint32_t num_input = input_resources.size();
+  buffer_bindings.resize(num_input);
+  for (uint32_t i = 0; i < num_input; i++) {
+    if (i == 0) {
+      buffer_bindings[i] = {nullptr, 0, 0};
+    } else {
+      auto resource = input_resources[i];
+      buffer_bindings[i] = {resource->Get(), 0, resource->bytes_size()};
+    }
+  }
+  DML_BUFFER_ARRAY_BINDING input_binding = {num_input,
+                                            buffer_bindings.data()};
+  binding_table->BindInputs(
+      1, &DML_BINDING_DESC{DML_BINDING_TYPE_BUFFER_ARRAY, &input_binding});
+#else // DML_MANAGED_WEIGHTS
+  binding_table->BindInputs(0, nullptr);
+#endif // DML_MANAGED_WEIGHTS
+
   if (initialize_temporary_buffer) {
     DML_BUFFER_BINDING buffer_binding{
         temporary_buffer.Get(), 0,
@@ -224,11 +274,18 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
   DML_CHECK_SUCCEEDED(device->dml_device->CreateCommandRecorder(IID_PPV_ARGS(&command_recorder)));
 
   // Record execution of the operator initializer.
-  command_recorder->RecordDispatch(device->command_list,
+  command_recorder->RecordDispatch(device->command_list.Get(),
                                    operator_initializer.Get(),
                                    binding_table.Get());
 
   device->CloseExecuteResetWait();
+
+#if DML_MANAGED_WEIGHTS
+  for (uint32_t i = 1; i < num_input; i++) {
+    input_resources[i] = nullptr;
+  }
+  const_objects_.RemoveAllResource();
+#endif // DML_MANAGED_WEIGHTS
 
   return absl::OkStatus();
 }
@@ -257,35 +314,56 @@ ValueId Runtime::CreateInputTensorExpression(
   UINT tensor_sizes[4] = {shape.b, shape.c, shape.h, shape.w};
   ::dml::TensorDesc::Dimensions dimensions(std::begin(tensor_sizes),
                                            std::end(tensor_sizes));
-  auto output =
-      ::dml::InputTensor(scope, index,
-                         ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, flags,
-                                           dimensions, policy));
+  auto output = ::dml::InputTensor(scope, index, ::dml::TensorDesc(
+                                   DML_TENSOR_DATA_TYPE_FLOAT32,
+                                   dimensions, policy));
 
   expressions[value->id] = output;
   return value->id;
 }
 
+void GetStrides(const uint32_t* sizes, /*TensorLayout layout,*/ uint32_t* stridesOut) {
+/*  switch (layout) {
+    case TensorLayout::NHWC:
+      stridesOut[0] = sizes[1] * sizes[2] * sizes[3];
+      stridesOut[1] = 1;
+      stridesOut[2] = sizes[1] * sizes[3];
+      stridesOut[3] = sizes[1];
+      break;
+
+    default:*/
+      stridesOut[0] = sizes[1] * sizes[2] * sizes[3];
+      stridesOut[1] = sizes[2] * sizes[3];
+      stridesOut[2] = sizes[3];
+      stridesOut[3] = 1;
+//  }
+}
+
 ::dml::Expression Runtime::CreateConstInputTensorExpression(
     ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
-    const ::dml::TensorPolicy& policy, const uint8_t* data, uint32_t size,
-    ::dml::TensorDesc::Dimensions& dimensions)
-{
+    const ::dml::TensorPolicy& policy, const uint8_t* data,
+    DML_TENSOR_DATA_TYPE data_type, const uint32_t* sizes) {
+
+  uint32_t strides[4];
+  GetStrides(sizes, /*m_tensorLayout,*/ strides);
+  uint64_t buffer_size = DMLCalcBufferTensorSize(data_type, 4, sizes, strides);
+
   uint32_t index = input_resources.size();
-  D3DResource* resource = AllocateConstObject(data, size);
+  D3DResource* resource = AllocateConstObject(data, buffer_size);
   input_resources.push_back(resource);
 
-  return ::dml::InputTensor(scope, index,
-                            ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32,
-                                              flags, dimensions, policy));
+  ::dml::TensorDesc::Dimensions dimensions = {sizes[0], sizes[1], sizes[2],
+                                              sizes[3]};
+  return ::dml::InputTensor(
+      scope, index, ::dml::TensorDesc(data_type, flags, dimensions, policy));
 }
 
 ValueId Runtime::CreateConcatExpression(
-    const GraphFloat32& graph, const Node& node,
+    const GraphFloat32& graph, const Node* node,
     std::map<ValueId, ::dml::Expression>& expressions) {
-  auto input_values = graph.FindInputs(node.id);
-  auto output_values = graph.FindOutputs(node.id);
-  auto attr = absl::any_cast<ConcatAttributes>(node.operation.attributes);
+  auto input_values = graph.FindInputs(node->id);
+  auto output_values = graph.FindOutputs(node->id);
+  auto attr = absl::any_cast<ConcatAttributes>(node->operation.attributes);
 
   const ::dml::Expression inputs[2] = {expressions[input_values[0]->id],
                                        expressions[input_values[1]->id]};
@@ -300,11 +378,13 @@ ValueId Runtime::CreateConcatExpression(
 ValueId Runtime::CreateConvolution2DExpression(
     ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
     const ::dml::TensorPolicy& policy, const GraphFloat32& graph,
-    const Node& node,
+    const Node* node, const Node* activation_node,
     std::map<ValueId, ::dml::Expression>& expressions) {
-  auto inputs = graph.FindInputs(node.id);
-  auto outputs = graph.FindOutputs(node.id);
-  auto attr = absl::any_cast<Convolution2DAttributes>(node.operation.attributes);
+  auto inputs = graph.FindInputs(node->id);
+  auto outputs = activation_node ? graph.FindOutputs(activation_node->id)
+                                 : graph.FindOutputs(node->id);
+  auto attr =
+      absl::any_cast<Convolution2DAttributes>(node->operation.attributes);
 
   // Input Expression
   auto input = expressions[inputs[0]->id];
@@ -313,9 +393,15 @@ ValueId Runtime::CreateConvolution2DExpression(
   // Weights Expression
   const auto& weights_shape = attr.weights.shape;
 
+#if DML_DATA_TYPE_HALF
+  std::vector<uint16_t> gpu_data;
+  UINT data_size = sizeof(uint16_t);
+#else // DML_DATA_TYPE_HALF
   std::vector<float> gpu_data;
-  gpu_data.resize(weights_shape.o * weights_shape.h * weights_shape.w *
-                   weights_shape.i);
+  UINT data_size = sizeof(float);
+#endif // DML_DATA_TYPE_HALF
+
+  gpu_data.resize(weights_shape.o * weights_shape.h * weights_shape.w * weights_shape.i);
   for (uint32_t o = 0; o < weights_shape.o; o++) {
     for (uint32_t h = 0; h < weights_shape.h; h++) {
       for (uint32_t w = 0; w < weights_shape.w; w++) {
@@ -324,7 +410,12 @@ ValueId Runtime::CreateConvolution2DExpression(
           uint32_t idx = w + h * weights_shape.w;
 
           gpu_data[offset + idx + i * weights_shape.h * weights_shape.w] =
+#if DML_DATA_TYPE_HALF
+              Float16Compressor::compress(
+                attr.weights.data[offset + idx * weights_shape.i + i]);
+#else // DML_DATA_TYPE_HALF
               attr.weights.data[offset + idx * weights_shape.i + i];
+#endif  // DML_DATA_TYPE_HALF
         }
       }
     }
@@ -332,23 +423,39 @@ ValueId Runtime::CreateConvolution2DExpression(
 
   UINT weights_tensor_sizes[4] = {weights_shape.o, weights_shape.i,
                                   weights_shape.h, weights_shape.w};
-  ::dml::TensorDesc::Dimensions weights_dimensions(
-      std::begin(weights_tensor_sizes), std::end(weights_tensor_sizes));
   auto filter = CreateConstInputTensorExpression(
       scope, flags, policy, reinterpret_cast<const uint8_t*>(gpu_data.data()),
-      gpu_data.size() * sizeof(float), weights_dimensions);
-  //      reinterpret_cast<const uint8_t*>(attr.weights.data.data()),
-//      attr.weights.data.size() * sizeof(float), weights_dimensions);
+#if DML_DATA_TYPE_HALF
+      DML_TENSOR_DATA_TYPE_FLOAT16,
+#else   // DML_DATA_TYPE_HALF
+      DML_TENSOR_DATA_TYPE_FLOAT32,
+#endif  // DML_DATA_TYPE_HALF
+      weights_tensor_sizes);
 
   // Bias Expression
   const auto& bias_shape = attr.bias.shape;
   UINT bias_tensor_sizes[4] = {1, bias_shape.v, 1, 1};
-  ::dml::TensorDesc::Dimensions bias_dimensions(std::begin(bias_tensor_sizes),
-                                                std::end(bias_tensor_sizes));
+  const UINT num_bias = attr.bias.data.size();
+#if DML_DATA_TYPE_HALF
+  gpu_data.clear();
+  gpu_data.reserve(num_bias);
+  for (auto bias : attr.bias.data) {
+    gpu_data.push_back(Float16Compressor::compress(bias));
+  }
+#endif  // DML_DATA_TYPE_HALF
   auto bias = CreateConstInputTensorExpression(
       scope, flags, policy,
+#if DML_DATA_TYPE_HALF
+      reinterpret_cast<const uint8_t*>(gpu_data.data()),
+#else  // DML_DATA_TYPE_HALF
       reinterpret_cast<const uint8_t*>(attr.bias.data.data()),
-      attr.bias.data.size() * sizeof(float), bias_dimensions);
+#endif  // DML_DATA_TYPE_HALF
+#if DML_DATA_TYPE_HALF
+      DML_TENSOR_DATA_TYPE_FLOAT16,
+#else   // DML_DATA_TYPE_HALF
+      DML_TENSOR_DATA_TYPE_FLOAT32,
+#endif  // DML_DATA_TYPE_HALF
+      bias_tensor_sizes);
 
   // Parameters
   const uint32_t strides[2] = {attr.strides.h, attr.strides.w};
@@ -364,6 +471,8 @@ ValueId Runtime::CreateConvolution2DExpression(
                     .Dilations(::dml::Span<const uint32_t>{dilations})
                     .StartPadding(::dml::Span<const uint32_t>{start_padding})
                     .EndPadding(::dml::Span<const uint32_t>{end_padding})
+                    .FusedActivation(activation_node ? ::dml::FusedActivation::Relu()
+                                                     : ::dml::FusedActivation::None())
                     .Build();
 #else
   auto output = ::dml::Identity(input);
@@ -374,11 +483,11 @@ ValueId Runtime::CreateConvolution2DExpression(
 }
 
 ValueId Runtime::CreatePadExpression(
-    const GraphFloat32& graph, const Node& node,
+    const GraphFloat32& graph, const Node* node,
     std::map<ValueId, ::dml::Expression>& expressions) {
-  auto inputs = graph.FindInputs(node.id);
-  auto outputs = graph.FindOutputs(node.id);
-  auto attr = absl::any_cast<PadAttributes>(node.operation.attributes);
+  auto inputs = graph.FindInputs(node->id);
+  auto outputs = graph.FindOutputs(node->id);
+  auto attr = absl::any_cast<PadAttributes>(node->operation.attributes);
   DML_PADDING_MODE padding_mode = attr.type == PaddingContentType::ZEROS
                                       ? DML_PADDING_MODE_CONSTANT
                                       : attr.type == PaddingContentType::REFLECT
@@ -403,11 +512,11 @@ ValueId Runtime::CreatePadExpression(
 }
 
 ValueId Runtime::CreateReLUExpression(
-    const GraphFloat32& graph, const Node& node,
+    const GraphFloat32& graph, const Node* node,
     std::map<ValueId, ::dml::Expression>& expressions) {
-  auto inputs = graph.FindInputs(node.id);
-  auto outputs = graph.FindOutputs(node.id);
-  auto attr = absl::any_cast<ReLUAttributes>(node.operation.attributes);
+  auto inputs = graph.FindInputs(node->id);
+  auto outputs = graph.FindOutputs(node->id);
+  auto attr = absl::any_cast<ReLUAttributes>(node->operation.attributes);
 
   auto input = expressions[inputs[0]->id];
 #if 1
@@ -421,11 +530,11 @@ ValueId Runtime::CreateReLUExpression(
 }
 
 ValueId Runtime::CreateSliceExpression(
-    const GraphFloat32& graph, const Node& node,
+    const GraphFloat32& graph, const Node* node,
     std::map<ValueId, ::dml::Expression>& expressions) {
-  auto inputs = graph.FindInputs(node.id);
-  auto outputs = graph.FindOutputs(node.id);
-  auto attr = absl::any_cast<SliceAttributes>(node.operation.attributes);
+  auto inputs = graph.FindInputs(node->id);
+  auto outputs = graph.FindOutputs(node->id);
+  auto attr = absl::any_cast<SliceAttributes>(node->operation.attributes);
 
   const auto& input_shape = inputs[0]->tensor.shape;
   const auto& output_shape = outputs[0]->tensor.shape;
@@ -448,33 +557,43 @@ ValueId Runtime::CreateSliceExpression(
 }
 
 ValueId Runtime::CreateClipExpression(
-    const GraphFloat32& graph, const Node& node,
-    std::map<ValueId, ::dml::Expression>& expressions,
-    float min_value, float max_value) {
-  auto input_values = graph.FindInputs(node.id);
-  auto output_values = graph.FindOutputs(node.id);
+    const GraphFloat32& graph, const Node* min_node, const Node* max_node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto input_values = min_node ? graph.FindInputs(min_node->id)
+                               : graph.FindInputs(max_node->id);
+  auto output_values = max_node ? graph.FindOutputs(max_node->id)
+                                : graph.FindOutputs(min_node->id);
+
+  float min_value = FLT_MAX;
+  if (min_node) {
+    auto attr =
+        absl::any_cast<ElementwiseAttributes>(min_node->operation.attributes);
+    min_value = *absl::get_if<float>(&attr.param);
+  }
+  float max_value = FLT_MIN;
+  if (max_node) {
+    auto attr =
+        absl::any_cast<ElementwiseAttributes>(max_node->operation.attributes);
+    max_value = *absl::get_if<float>(&attr.param);
+  }
 
   auto input = expressions[input_values[0]->id];
-  auto output = ::dml::Clip(input, min_value, max_value);
+  auto output = ::dml::Clip(input, max_value, min_value);
 
   expressions[output_values[0]->id] = output;
   return output_values[0]->id;
 }
 
 ValueId Runtime::CreateMaximumExpression(
-    const GraphFloat32& graph, const Node& node,
+    const GraphFloat32& graph, const Node* node,
     std::map<ValueId, ::dml::Expression>& expressions) {
-  auto attr = absl::any_cast<ElementwiseAttributes>(node.operation.attributes);
-  const float* scalar = absl::get_if<float>(&attr.param);
-  return CreateClipExpression(graph, node, expressions, *scalar, FLT_MAX);
+  return CreateClipExpression(graph, nullptr, node, expressions);
 }
 
 ValueId Runtime::CreateMinimumExpression(
-    const GraphFloat32& graph, const Node& node,
+    const GraphFloat32& graph, const Node* node,
     std::map<ValueId, ::dml::Expression>& expressions) {
-  auto attr = absl::any_cast<ElementwiseAttributes>(node.operation.attributes);
-  const float* scalar = absl::get_if<float>(&attr.param);
-  return CreateClipExpression(graph, node, expressions, FLT_MIN, *scalar);
+  return CreateClipExpression(graph, node, nullptr, expressions);
 }
 
 absl::Status Runtime::Execute() {
@@ -509,27 +628,33 @@ absl::Status Runtime::Execute() {
 
   std::vector<DML_BUFFER_BINDING> buffer_bindings;
   std::vector<DML_BINDING_DESC> input_bindings;
-  buffer_bindings.reserve(input_resources.size());
-  input_bindings.reserve(input_resources.size());
-  for (auto resource : input_resources) {
-    DML_BUFFER_BINDING input_buffer_binding{resource->Get(), 0, resource->bytes_size()};
-    buffer_bindings.push_back(input_buffer_binding);
-
-    DML_BINDING_DESC input_binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_bindings[buffer_bindings.size() - 1]};
-    input_bindings.push_back(input_binding_desc);
+  const uint32_t num_input = input_resources.size();
+  buffer_bindings.resize(num_input);
+  input_bindings.resize(num_input);
+  for (uint32_t i = 0; i < num_input; i++) {
+#if DML_MANAGED_WEIGHTS
+    if (i == 0) {
+      auto resource = input_resources[i];
+      buffer_bindings[i] = {resource->Get(), 0, resource->bytes_size()};
+      input_bindings[i] = {DML_BINDING_TYPE_BUFFER, &buffer_bindings[i]};
+    } else {
+      input_bindings[i] = {DML_BINDING_TYPE_NONE, nullptr};
+    }
+#else  // DML_MANAGED_WEIGHTS
+    auto resource = input_resources[i];
+    buffer_bindings[i] = {resource->Get(), 0, resource->bytes_size()};
+    input_bindings[i] = {DML_BINDING_TYPE_BUFFER, &buffer_bindings[i]};
+#endif  // DML_MANAGED_WEIGHTS
   }
-  binding_table->BindInputs(input_bindings.size(), input_bindings.data());
+  binding_table->BindInputs(num_input, input_bindings.data());
 
-  for (auto resource : output_resources) {
-    DML_BUFFER_BINDING output_buffer_binding{resource->Get(), 0,
-                                             resource->bytes_size()};
-    DML_BINDING_DESC output_binding_desc{DML_BINDING_TYPE_BUFFER,
-                                       &output_buffer_binding};
-    binding_table->BindOutputs(1, &output_binding_desc);
-  }
+  DML_BUFFER_BINDING output_buffer_binding = {output_resources[0]->Get(), 0,
+                                              output_resources[0]->bytes_size()};
+  binding_table->BindOutputs(
+      1, &DML_BINDING_DESC{DML_BINDING_TYPE_BUFFER, &output_buffer_binding});
 
   // Record execution of the compiled operator.
-  command_recorder->RecordDispatch(device->command_list,
+  command_recorder->RecordDispatch(device->command_list.Get(),
                                    compiled_operator.Get(),
                                    binding_table.Get());
 

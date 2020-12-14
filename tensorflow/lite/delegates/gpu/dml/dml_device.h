@@ -33,13 +33,8 @@ class DMLDevice {
   DMLDevice() = default;
   DMLDevice(Microsoft::WRL::ComPtr<IDXGIFactory4>& factory,
             Microsoft::WRL::ComPtr<IDXGIAdapter1>& adapter,
-            Microsoft::WRL::ComPtr<ID3D12Device>& device,
-            Microsoft::WRL::ComPtr<ID3D12CommandQueue>& command_queue,
-            Microsoft::WRL::ComPtr<ID3D12CommandAllocator>& command_allocator,
-            Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList>& command_list);
-  DMLDevice(ID3D12Device* device, ID3D12CommandQueue* command_queue,
-            ID3D12CommandAllocator* command_allocator,
-            ID3D12GraphicsCommandList* command_list);
+            Microsoft::WRL::ComPtr<ID3D12Device>& device);
+  DMLDevice(ID3D12Device* device);
 
   ~DMLDevice() {}
 
@@ -49,14 +44,12 @@ class DMLDevice {
   Microsoft::WRL::ComPtr<IDXGIFactory4> dxgi_factory;
   Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgi_adapter;
   Microsoft::WRL::ComPtr<ID3D12Device> d3d_device_ptr;
-  Microsoft::WRL::ComPtr<ID3D12CommandQueue> command_queue_ptr;
-  Microsoft::WRL::ComPtr<ID3D12CommandAllocator> command_allocator_ptr;
-  Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> command_list_ptr;
 
   ID3D12Device* d3d_device;
-  ID3D12CommandQueue* command_queue;
-  ID3D12CommandAllocator* command_allocator;
-  ID3D12GraphicsCommandList* command_list;
+
+  Microsoft::WRL::ComPtr<ID3D12CommandQueue> command_queue;
+  Microsoft::WRL::ComPtr<ID3D12CommandAllocator> command_allocator;
+  Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> command_list;
 
   Microsoft::WRL::ComPtr<IDMLDevice> dml_device;
 };
