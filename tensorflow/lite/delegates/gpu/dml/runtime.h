@@ -61,6 +61,10 @@ class Runtime {
       ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
       const ::dml::TensorPolicy& policy, const uint8_t* data,
       DML_TENSOR_DATA_TYPE data_type, const UINT* sizes);
+
+  ValueId CreateAddExpression(
+      const GraphFloat32& graph, const Node* node,
+      std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateConcatExpression(
       const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
@@ -68,6 +72,9 @@ class Runtime {
       ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
       const ::dml::TensorPolicy& policy, const GraphFloat32& graph,
       const Node* node, const Node* activation_node,
+      std::map<ValueId, ::dml::Expression>& expressions);
+  ValueId CreateMulExpression(
+      const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreatePadExpression(
       const GraphFloat32& graph, const Node* node,
@@ -81,10 +88,16 @@ class Runtime {
   ValueId CreateClipExpression(
       const GraphFloat32& graph, const Node* min_node, const Node* max_node,
       std::map<ValueId, ::dml::Expression>& expressions);
+  ValueId CreateTanhExpression(
+      const GraphFloat32& graph, const Node* node,
+      std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateMaximumExpression(
       const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
   ValueId CreateMinimumExpression(
+      const GraphFloat32& graph, const Node* node,
+      std::map<ValueId, ::dml::Expression>& expressions);
+  ValueId CreateSubExpression(
       const GraphFloat32& graph, const Node* node,
       std::map<ValueId, ::dml::Expression>& expressions);
 };

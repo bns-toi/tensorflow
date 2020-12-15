@@ -119,19 +119,27 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
     OperationType next_op_type =
         next_node ? OperationTypeFromString(next_node->operation.type)
                   : OperationType::UNKNOWN;
+    std::cout << node->operation.type << " > ";
     switch (op_type) {
+      case OperationType::ADD: {
+        last_output = CreateAddExpression(graph, node, expressions);
+      } break;
       case OperationType::CONCAT: {
         last_output = CreateConcatExpression(graph, node, expressions);
       } break;
       case OperationType::CONVOLUTION_2D: {
         const Node* activation_node = nullptr;
 #if OPTIMIZE_NODE
-        if (next_op_type == OperationType::RELU) {
+        if (next_op_type == OperationType::RELU ||
+            next_op_type == OperationType::TANH) {
           activation_node = next_node;
           i++;
         }
 #endif // OPTIMIZE_NODE
         last_output = CreateConvolution2DExpression(scope, flags, policy, graph, node, activation_node, expressions);
+      } break;
+      case OperationType::MUL: {
+        last_output = CreateMulExpression(graph, node, expressions);
       } break;
       case OperationType::PAD: {
         last_output = CreatePadExpression(graph, node, expressions);
@@ -141,6 +149,9 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
       } break;
       case OperationType::SLICE: {
         last_output = CreateSliceExpression(graph, node, expressions);
+      } break;
+      case OperationType::TANH: {
+        last_output = CreateTanhExpression(graph, node, expressions);
       } break;
       case OperationType::MAXIMUM: {
         last_output = CreateMaximumExpression(graph, node, expressions);
@@ -155,6 +166,9 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
         {
           last_output = CreateMinimumExpression(graph, node, expressions);
         }
+      } break;
+      case OperationType::SUB: {
+        last_output = CreateSubExpression(graph, node, expressions);
       } break;
       default:
         return absl::UnimplementedError(absl::StrCat(
@@ -358,6 +372,33 @@ void GetStrides(const uint32_t* sizes, /*TensorLayout layout,*/ uint32_t* stride
       scope, index, ::dml::TensorDesc(data_type, flags, dimensions, policy));
 }
 
+ValueId Runtime::CreateAddExpression(
+    const GraphFloat32& graph, const Node* node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto input_values = graph.FindInputs(node->id);
+  auto output_values = graph.FindOutputs(node->id);
+
+  if (input_values.size() >= 2) {
+    const ::dml::Expression inputs[2] = {expressions[input_values[0]->id],
+                                         expressions[input_values[1]->id]};
+    auto output = ::dml::Add(inputs[0], inputs[1]);
+
+    expressions[output_values[0]->id] = output;
+  }
+  else {
+    auto attr = absl::any_cast<AddAttributes>(node->operation.attributes);
+    const float* scalar = absl::get_if<float>(&attr.param);
+    DML_SCALE_BIAS scale_bias = {0.0f, *scalar};
+
+    auto input = expressions[input_values[0]->id];
+    auto output = ::dml::Identity(input, scale_bias);
+
+    expressions[output_values[0]->id] = output;
+  }
+
+  return output_values[0]->id;
+}
+
 ValueId Runtime::CreateConcatExpression(
     const GraphFloat32& graph, const Node* node,
     std::map<ValueId, ::dml::Expression>& expressions) {
@@ -383,8 +424,10 @@ ValueId Runtime::CreateConvolution2DExpression(
   auto inputs = graph.FindInputs(node->id);
   auto outputs = activation_node ? graph.FindOutputs(activation_node->id)
                                  : graph.FindOutputs(node->id);
-  auto attr =
-      absl::any_cast<Convolution2DAttributes>(node->operation.attributes);
+  OperationType activation_type =
+      activation_node ? OperationTypeFromString(activation_node->operation.type)
+                      : OperationType::UNKNOWN;
+  auto attr = absl::any_cast<Convolution2DAttributes>(node->operation.attributes);
 
   // Input Expression
   auto input = expressions[inputs[0]->id];
@@ -471,12 +514,33 @@ ValueId Runtime::CreateConvolution2DExpression(
                     .Dilations(::dml::Span<const uint32_t>{dilations})
                     .StartPadding(::dml::Span<const uint32_t>{start_padding})
                     .EndPadding(::dml::Span<const uint32_t>{end_padding})
-                    .FusedActivation(activation_node ? ::dml::FusedActivation::Relu()
-                                                     : ::dml::FusedActivation::None())
+                    .FusedActivation(
+                      activation_type == OperationType::RELU
+                        ? ::dml::FusedActivation::Relu()
+                        : activation_type == OperationType::TANH
+                          ? ::dml::FusedActivation::Tanh()
+                          : ::dml::FusedActivation::None())
                     .Build();
 #else
   auto output = ::dml::Identity(input);
 #endif
+
+  expressions[outputs[0]->id] = output;
+  return outputs[0]->id;
+}
+
+ValueId Runtime::CreateMulExpression(
+    const GraphFloat32& graph, const Node* node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto inputs = graph.FindInputs(node->id);
+  auto outputs = graph.FindOutputs(node->id);
+
+  auto attr = absl::any_cast<MultiplyAttributes>(node->operation.attributes);
+  const float* scalar = absl::get_if<float>(&attr.param);
+  DML_SCALE_BIAS scale_bias = {*scalar, 0.0f};
+        
+  auto input = expressions[inputs[0]->id];
+  auto output = ::dml::Identity(input, scale_bias);
 
   expressions[outputs[0]->id] = output;
   return outputs[0]->id;
@@ -556,6 +620,19 @@ ValueId Runtime::CreateSliceExpression(
   return outputs[0]->id;
 }
 
+ValueId Runtime::CreateTanhExpression(
+    const GraphFloat32& graph, const Node* node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto inputs = graph.FindInputs(node->id);
+  auto outputs = graph.FindOutputs(node->id);
+
+  auto input = expressions[inputs[0]->id];
+  auto output = ::dml::Tanh(input);
+
+  expressions[outputs[0]->id] = output;
+  return outputs[0]->id;
+}
+
 ValueId Runtime::CreateClipExpression(
     const GraphFloat32& graph, const Node* min_node, const Node* max_node,
     std::map<ValueId, ::dml::Expression>& expressions) {
@@ -594,6 +671,23 @@ ValueId Runtime::CreateMinimumExpression(
     const GraphFloat32& graph, const Node* node,
     std::map<ValueId, ::dml::Expression>& expressions) {
   return CreateClipExpression(graph, node, nullptr, expressions);
+}
+
+ValueId Runtime::CreateSubExpression(
+    const GraphFloat32& graph, const Node* node,
+    std::map<ValueId, ::dml::Expression>& expressions) {
+  auto inputs = graph.FindInputs(node->id);
+  auto outputs = graph.FindOutputs(node->id);
+
+  auto attr = absl::any_cast<ElementwiseAttributes>(node->operation.attributes);
+  const float* scalar = absl::get_if<float>(&attr.param);
+  DML_SCALE_BIAS scale_bias = {0.0f, -(*scalar)};
+
+  auto input = expressions[inputs[0]->id];
+  auto output = ::dml::Identity(input, scale_bias);
+
+  expressions[outputs[0]->id] = output;
+  return outputs[0]->id;
 }
 
 absl::Status Runtime::Execute() {
