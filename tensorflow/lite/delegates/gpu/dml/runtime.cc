@@ -119,7 +119,6 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
     OperationType next_op_type =
         next_node ? OperationTypeFromString(next_node->operation.type)
                   : OperationType::UNKNOWN;
-    std::cout << node->operation.type << " > ";
     switch (op_type) {
       case OperationType::ADD: {
         last_output = CreateAddExpression(graph, node, expressions);
@@ -388,7 +387,7 @@ ValueId Runtime::CreateAddExpression(
   else {
     auto attr = absl::any_cast<AddAttributes>(node->operation.attributes);
     const float* scalar = absl::get_if<float>(&attr.param);
-    DML_SCALE_BIAS scale_bias = {0.0f, *scalar};
+    DML_SCALE_BIAS scale_bias = {1.0f, *scalar};
 
     auto input = expressions[input_values[0]->id];
     auto output = ::dml::Identity(input, scale_bias);
@@ -681,7 +680,7 @@ ValueId Runtime::CreateSubExpression(
 
   auto attr = absl::any_cast<ElementwiseAttributes>(node->operation.attributes);
   const float* scalar = absl::get_if<float>(&attr.param);
-  DML_SCALE_BIAS scale_bias = {0.0f, -(*scalar)};
+  DML_SCALE_BIAS scale_bias = {1.0f, -(*scalar)};
 
   auto input = expressions[inputs[0]->id];
   auto output = ::dml::Identity(input, scale_bias);
