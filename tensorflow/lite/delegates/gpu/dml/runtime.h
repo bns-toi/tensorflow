@@ -20,8 +20,13 @@ limitations under the License.
 #include <memory>
 
 #include "tensorflow/lite/delegates/gpu/common/model.h"
+#include "tensorflow/lite/delegates/gpu/common/operations.h"
 #include "tensorflow/lite/delegates/gpu/dml/environment.h"
 #include "tensorflow/lite/delegates/gpu/dml/object_manager.h"
+
+// Let DirectML manage the data in the weight tensors. This can be faster on
+// some hardware.
+#define DML_MANAGED_WEIGHTS 1
 
 namespace tflite {
 namespace gpu {
@@ -53,54 +58,69 @@ class Runtime {
 
   D3DResource* AllocateConstObject(const uint8_t* data, uint32_t size);
 
-  ValueId CreateInputTensorExpression(
+  absl::Status CreateOperator(const GraphFloat32& graph);
+
+  absl::Status CreateInputTensorExpression(
       ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
       const ::dml::TensorPolicy& policy, const Value* value,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ::dml::Expression CreateConstInputTensorExpression(
+      ::dml::Expression& output);
+  absl::Status CreateConstInputTensorExpression(
       ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
       const ::dml::TensorPolicy& policy, const uint8_t* data,
-      DML_TENSOR_DATA_TYPE data_type, const UINT* sizes);
+      DML_TENSOR_DATA_TYPE data_type, const UINT* sizes,
+      ::dml::Expression& output);
 
-  ValueId CreateAddExpression(
-      const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateConcatExpression(
-      const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateConvolution2DExpression(
+  absl::Status CreateAddExpression(const GraphFloat32& graph, const Node* node,
+                                   const std::vector<::dml::Expression>& inputs,
+                                   std::vector<::dml::Expression>& outputs);
+  absl::Status CreateConcatExpression(const GraphFloat32& graph, const Node* node,
+      const std::vector<::dml::Expression>& inputs,
+      std::vector<::dml::Expression>& outputs);
+  absl::Status CreateConvolution2DExpression(
       ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
       const ::dml::TensorPolicy& policy, const GraphFloat32& graph,
-      const Node* node, const Node* activation_node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateMulExpression(
+      const Node* node, OperationType activation_type,
+      const std::vector<::dml::Expression>& inputs,
+      std::vector<::dml::Expression>& outputs);
+  absl::Status CreatePadExpression(const GraphFloat32& graph, const Node* node,
+                                   const std::vector<::dml::Expression>& inputs,
+                                   std::vector<::dml::Expression>& outputs);
+  absl::Status CreateSliceExpression(
       const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreatePadExpression(
-      const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateReLUExpression(
-      const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateSliceExpression(
-      const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateClipExpression(
+      const std::vector<::dml::Expression>& inputs,
+      std::vector<::dml::Expression>& outputs);
+  absl::Status CreateClipExpression(
       const GraphFloat32& graph, const Node* min_node, const Node* max_node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateTanhExpression(
+      const std::vector<::dml::Expression>& inputs,
+      std::vector<::dml::Expression>& outputs);
+  absl::Status CreateReLUExpression(
       const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateMaximumExpression(
+      const std::vector<::dml::Expression>& inputs,
+      std::vector<::dml::Expression>& outputs);
+  absl::Status CreateTanhExpression(
       const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateMinimumExpression(
+      const std::vector<::dml::Expression>& inputs,
+      std::vector<::dml::Expression>& outputs);
+  absl::Status CreateMaximumExpression(
       const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-  ValueId CreateSubExpression(
+      const std::vector<::dml::Expression>& inputs,
+      std::vector<::dml::Expression>& outputs);
+  absl::Status CreateMinimumExpression(
       const GraphFloat32& graph, const Node* node,
-      std::map<ValueId, ::dml::Expression>& expressions);
-};
+      const std::vector<::dml::Expression>& inputs,
+      std::vector<::dml::Expression>& outputs);
+  absl::Status CreateScaleBiasExpression(float scale, float bias,
+                                   const std::vector<::dml::Expression>& inputs,
+                                   std::vector<::dml::Expression>& outputs);
+  absl::Status CreateMulExpression(const GraphFloat32& graph, const Node* node,
+                                   const std::vector<::dml::Expression>& inputs,
+                                   std::vector<::dml::Expression>& outputs);
+  absl::Status CreateSubExpression(const GraphFloat32& graph, const Node* node,
+                                   const std::vector<::dml::Expression>& inputs,
+                                   std::vector<::dml::Expression>& outputs);
+
+
+  };
 
 }  // namespace dml
 }  // namespace gpu

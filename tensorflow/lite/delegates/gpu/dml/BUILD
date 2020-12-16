@@ -75,8 +75,13 @@ cc_library(
 
 cc_library(
     name = "runtime",
-    srcs = ["runtime.cc"],
-    hdrs = ["runtime.h"],
+    srcs = [
+        "runtime.cc",
+        "operations.cc"
+    ],
+    hdrs = [
+        "runtime.h"
+    ],
     deps = [
     	":environment",
     	"//tensorflow/lite/delegates/gpu/common:model",
