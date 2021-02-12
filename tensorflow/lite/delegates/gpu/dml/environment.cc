@@ -24,15 +24,15 @@ namespace tflite {
 namespace gpu {
 namespace dml {
 
-Environment::Environment(DMLDevice&& device)
-    : device_(std::move(device)) {}
+Environment::Environment(DMLDevice* device)
+    : device_(device) {}
 
 Environment::Environment(Environment&& environment)
-    : device_(std::move(environment.device_)) {}
+    : device_(environment.device_) {}
 
 Environment& Environment::operator=(Environment&& environment) {
   if (this != &environment) {
-    device_ = std::move(environment.device_);
+    device_ = environment.device_;
   }
   return *this;
 }

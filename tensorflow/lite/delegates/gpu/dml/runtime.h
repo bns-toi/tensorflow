@@ -19,6 +19,10 @@ limitations under the License.
 #include <vector>
 #include <memory>
 
+#ifdef CONST
+#undef CONST
+#endif // CONST
+
 #include "tensorflow/lite/delegates/gpu/common/model.h"
 #include "tensorflow/lite/delegates/gpu/common/operations.h"
 #include "tensorflow/lite/delegates/gpu/dml/environment.h"

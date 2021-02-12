@@ -55,13 +55,8 @@ class UniqueHandle {
   HANDLE m_handle = nullptr;
 };
 
-DMLDevice::DMLDevice(
-    Microsoft::WRL::ComPtr<IDXGIFactory4>& factory,
-    Microsoft::WRL::ComPtr<IDXGIAdapter1>& adapter,
-    Microsoft::WRL::ComPtr<ID3D12Device>& device)
-    : dxgi_factory(factory),
-      dxgi_adapter(adapter),
-      d3d_device_ptr(device),
+DMLDevice::DMLDevice(Microsoft::WRL::ComPtr<ID3D12Device>& device)
+    : d3d_device_ptr(device),
       d3d_device(d3d_device_ptr.Get()) {}
 
 DMLDevice::DMLDevice(ID3D12Device* device)
@@ -145,7 +140,7 @@ absl::Status CreateDefaultGPUDevice(DMLDevice* result) {
                                         IID_PPV_ARGS(&d3d_device)));
 
   // construct
-  *result = DMLDevice(dxgi_factory, adapter, d3d_device);
+  *result = DMLDevice(d3d_device);
   return absl::OkStatus();
 }
 

@@ -26,7 +26,6 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/data_type.h"
 #include "tensorflow/lite/delegates/gpu/common/shape.h"
 #include "tensorflow/lite/delegates/gpu/common/tensor.h"
-#include "tensorflow/lite/delegates/gpu/dml/dml_device.h"
 #include "tensorflow/lite/delegates/gpu/dml/environment.h"
 #include "tensorflow/lite/delegates/gpu/dml/runtime.h"
 #include "tensorflow/lite/delegates/gpu/dml/kernels/converter.h"
@@ -206,7 +205,7 @@ class DefaultTensorTie : public TensorTie {
       case gpu::ObjectType::DIRECTML_RESOURCE: {
         D3DResource resource;
         RETURN_IF_ERROR(MaybeAllocateD3D12Resource(
-            env->GetDevicePtr(), d, def().access_type, &resource));
+            env->device(), d, def().access_type, &resource));
         internal_obj_ = DirectMlResource{resource.Get()};
         RETURN_IF_ERROR(
             objects_->RegisterResource(def().id, std::move(resource)));
@@ -234,7 +233,7 @@ class DefaultTensorTie : public TensorTie {
       }
       case ObjectType::DIRECTML_RESOURCE: {
         RETURN_IF_ERROR(MaybeAllocateD3D12Resource(
-            env->GetDevicePtr(), d, def().access_type, &external_resource_));
+            env->device(), d, def().access_type, &external_resource_));
         external_obj_ = DirectMlResource{external_resource_.Get()};
         D3DResource bbb;
         RETURN_IF_ERROR(
@@ -554,8 +553,8 @@ class InferenceBuilderImpl : public InferenceBuilder {
 
   absl::Status Build(std::unique_ptr<InferenceRunner>* runner) override {
     auto external_objects = absl::make_unique<ObjectManager>();
-    auto runtime = absl::make_unique<Runtime>(
-        environment_->GetDevicePtr(), external_objects.get());
+    auto runtime = absl::make_unique<Runtime>(environment_->device(),
+                                              external_objects.get());
     Runtime* runtime_ptr = runtime.get();
     auto runner_impl = absl::make_unique<InferenceRunnerImpl>(
         environment_, std::move(runtime), std::move(external_objects));
@@ -631,16 +630,19 @@ class InferenceEnvironmentImpl : public InferenceEnvironment {
   absl::Status Init() {
     properties_.is_directml_available = true;
 
-    DMLDevice device;
-    if (options_.device) {
-      device = DMLDevice(options_.device);
-    } else {
-      RETURN_IF_ERROR(CreateDefaultGPUDevice(&device));
+    DMLDevice* device = options_.dml_device;
+    if (!device) {
+      if (options_.d3d_device) {
+        device_.reset(new DMLDevice(options_.d3d_device));
+      } else {
+        device_.reset(new DMLDevice());
+        RETURN_IF_ERROR(CreateDefaultGPUDevice(device_.get()));
+      }
+      device_->Init();
+      device = device_.get();
     }
 
-    device.Init();
-
-    environment_ = Environment(std::move(device));
+    environment_ = Environment(device);
     return environment_.Init();
   }
 
@@ -679,6 +681,7 @@ class InferenceEnvironmentImpl : public InferenceEnvironment {
   const InferenceEnvironmentOptions options_;
   Environment environment_;
   InferenceEnvironmentProperties properties_;
+  std::unique_ptr<DMLDevice> device_;
 };
 
 }  // namespace

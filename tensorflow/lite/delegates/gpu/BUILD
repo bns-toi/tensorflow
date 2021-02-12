@@ -391,8 +391,8 @@ cc_library(
 
 cc_library(
     name = "dml_delegate",
-    srcs = ["delegate.cc"],
-    hdrs = ["delegate.h"],
+    srcs = ["dml_delegate.cc"],
+    hdrs = ["dml_delegate.h"],
     linkopts = select({
         "//tensorflow:android": [],
         "//conditions:default": [],

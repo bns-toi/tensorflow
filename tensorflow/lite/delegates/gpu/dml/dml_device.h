@@ -31,9 +31,7 @@ namespace dml {
 class DMLDevice {
  public:
   DMLDevice() = default;
-  DMLDevice(Microsoft::WRL::ComPtr<IDXGIFactory4>& factory,
-            Microsoft::WRL::ComPtr<IDXGIAdapter1>& adapter,
-            Microsoft::WRL::ComPtr<ID3D12Device>& device);
+  DMLDevice(Microsoft::WRL::ComPtr<ID3D12Device>& device);
   DMLDevice(ID3D12Device* device);
 
   ~DMLDevice() {}
@@ -41,10 +39,7 @@ class DMLDevice {
   void Init();
   void CloseExecuteResetWait();
 
-  Microsoft::WRL::ComPtr<IDXGIFactory4> dxgi_factory;
-  Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgi_adapter;
   Microsoft::WRL::ComPtr<ID3D12Device> d3d_device_ptr;
-
   ID3D12Device* d3d_device;
 
   Microsoft::WRL::ComPtr<ID3D12CommandQueue> command_queue;

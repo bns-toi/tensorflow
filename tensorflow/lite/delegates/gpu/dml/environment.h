@@ -28,21 +28,20 @@ namespace dml {
 class Environment {
  public:
   Environment() = default;
-  explicit Environment(DMLDevice&& device);
+  explicit Environment(DMLDevice* device);
   // Move only
   Environment(Environment&& environment);
   Environment& operator=(Environment&& environment);
   Environment(const Environment&) = delete;
   Environment& operator=(const Environment&) = delete;
 
-  const DMLDevice& device() const { return device_; }
-  DMLDevice* GetDevicePtr() { return &device_; }
-  const DMLDevice* GetDevicePtr() const { return &device_; }
+  const DMLDevice* device() const { return device_; }
+  DMLDevice* device() { return device_; }
 
   absl::Status Init();
 
  private:
-  DMLDevice device_;
+  DMLDevice* device_;
 };
 
 }  // namespace dml

@@ -17,6 +17,7 @@ limitations under the License.
 #define TENSORFLOW_LITE_DELEGATES_GPU_DELEGATE_H_
 
 #include <stdint.h>
+#include <d3d12.h>
 
 #include "tensorflow/lite/c/common.h"
 
@@ -114,6 +115,9 @@ typedef struct {
   // This limits the maximum number of partitions to be delegated. By default,
   // it's set to 1 in TfLiteGpuDelegateOptionsV2Default().
   int32_t max_delegated_partitions;
+
+  // device pointer
+  ID3D12Device* d3d_device;
 } TfLiteGpuDelegateOptionsV2;
 
 // Populates TfLiteGpuDelegateOptionsV2 as follows:

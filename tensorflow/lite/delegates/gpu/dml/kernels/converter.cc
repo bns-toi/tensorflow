@@ -266,8 +266,8 @@ class DirectMlTensorConverterBuilder : public TensorObjectConverterBuilder {
     std::unique_ptr<DirectMllConverterImpl> impl;
     const auto& input_def = input.object_def;
     const auto& output_def = output.object_def;
-    DMLDevice* device = environment_->GetDevicePtr();
-/*    if (TrivialCopier::IsSupported(input_def, output_def)) {
+    DMLDevice* device = environment_->device();
+    /*if (TrivialCopier::IsSupported(input_def, output_def)) {
       impl = absl::make_unique<TrivialCopier>();
     } else*/ if (CpuCopier::IsSupported(input_def, output_def)) {
       impl = absl::make_unique<CpuCopier>(device);

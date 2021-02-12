@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "tensorflow/lite/delegates/gpu/delegate.h"
+#include "tensorflow/lite/delegates/gpu/dml_delegate.h"
 
 #include <cstdint>
 #include <memory>
@@ -26,24 +26,18 @@ limitations under the License.
 #include "tensorflow/lite/builtin_ops.h"
 #include "tensorflow/lite/c/common.h"
 #include "tensorflow/lite/delegates/gpu/api.h"
-#ifdef TFLITE_GPU_CL
-#include "tensorflow/lite/delegates/gpu/cl/api.h"
-#include "tensorflow/lite/delegates/gpu/cl/opencl_wrapper.h"
-#include "tensorflow/lite/delegates/gpu/cl/tensor_type_util.h"
-#endif // TFLITE_GPU_CL
 #include "tensorflow/lite/delegates/gpu/common/model.h"
 #include "tensorflow/lite/delegates/gpu/common/model_builder.h"
 #include "tensorflow/lite/delegates/gpu/common/model_transformer.h"
 #include "tensorflow/lite/delegates/gpu/common/quantization_util.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
-#ifdef TFLITE_GPU_GL
-#include "tensorflow/lite/delegates/gpu/gl/api2.h"
-#endif // TFLITE_GPU_GL
+#include "tensorflow/lite/delegates/gpu/dml/api.h"
 #include "tensorflow/lite/kernels/internal/optimized/optimized_ops.h"
 #include "tensorflow/lite/minimal_logging.h"
 
 namespace tflite {
 namespace gpu {
+namespace dml {
 namespace {
 
 InferencePriority ToPriority(int32_t priority) {
@@ -90,6 +84,21 @@ class Delegate {
     }
   }
 
+  absl::Status Prepare(TfLiteContext* context,
+                       const TfLiteDelegateParams* delegate_params) {
+    if (!dml_device_) {
+      if (options_.d3d_device) {
+        dml_device_.reset(new DMLDevice(options_.d3d_device));
+      } else {
+        dml_device_.reset(new DMLDevice());
+        RETURN_IF_ERROR(CreateDefaultGPUDevice(dml_device_.get()));
+      }
+      dml_device_->Init();
+    }
+
+    return absl::OkStatus();
+  }
+
   TfLiteDelegate* tflite_delegate() { return &delegate_; }
   const TfLiteGpuDelegateOptionsV2& options() const { return options_; }
 
@@ -102,11 +111,15 @@ class Delegate {
   }
   int num_delegate_kernels() const { return num_delegate_kernels_; }
 
+  DMLDevice* dml_device() { return dml_device_.get(); }
+
  private:
   TfLiteDelegate delegate_;
 
   TfLiteGpuDelegateOptionsV2 options_;
   int num_delegate_kernels_ = 0;
+
+  std::unique_ptr<DMLDevice> dml_device_;
 
   friend class DelegateKernel;
 };
@@ -134,45 +147,9 @@ class DelegateKernel {
     std::unique_ptr<InferenceBuilder> builder;
     bool graph_is_destroyed;
     const int experimental_flags = delegate_->options().experimental_flags;
-    if (experimental_flags & TFLITE_GPU_EXPERIMENTAL_FLAGS_CL_ONLY) {
-#ifdef TFLITE_GPU_CL
-      RETURN_IF_ERROR(
-          InitializeOpenClApi(&graph, &builder, &graph_is_destroyed));
-#else // TFLITE_GPU_CL
-      return absl::Status(absl::StatusCode::kInvalidArgument, "Not support OpenCL");
-#endif // TFLITE_GPU_CL
-    } else if (experimental_flags & TFLITE_GPU_EXPERIMENTAL_FLAGS_GL_ONLY) {
-#ifdef TFLITE_GPU_GL
-      RETURN_IF_ERROR(InitializeOpenGlApi(&graph, &builder));
-#else // TFLITE_GPU_GL
-      return absl::Status(absl::StatusCode::kInvalidArgument, "Not support OpenGL");
-#endif // TFLITE_GPU_GL
-    } else {
-#ifdef TFLITE_GPU_CL
-      // By default, we try CL first & fall back to GL if that fails.
-      absl::Status status =
-          InitializeOpenClApi(&graph, &builder, &graph_is_destroyed);
-#else // TFLITE_GPU_CL
-      absl::Status(absl::StatusCode::kInvalidArgument, "Not support OpenCL");
-#endif // TFLITE_GPU_CL
-      if (!status.ok()) {
-        TF_LITE_KERNEL_LOG(context, std::string(status.message()).c_str());
-        TF_LITE_KERNEL_LOG(context, "Falling back to OpenGL");
-
-        // Graph needs to be re-created because it is moved above.
-        GraphFloat32 graph2;
-        if (graph_is_destroyed) {
-          RETURN_IF_ERROR(InitializeGraph(context, delegate_params, &graph2,
-                                          &input_refs, &output_refs));
-        }
-#ifdef TFLITE_GPU_GL
-        RETURN_IF_ERROR(InitializeOpenGlApi(
-            graph_is_destroyed ? &graph2 : &graph, &builder));
-#else // TFLITE_GPU_GL
-      return absl::Status(absl::StatusCode::kInvalidArgument, "Not support OpenGL");
-#endif // TFLITE_GPU_GL
-      }
-    }
+    ID3D12Device* d3d_device = delegate_->options().d3d_device;
+    RETURN_IF_ERROR(InitializeDirectMLApi(&graph, &builder,
+                                          delegate_->dml_device(), d3d_device));
 
     // At this point tflite didn't allocate tensors yet, therefore, collect
     // indices and set all input and output tensors from tflite later.
@@ -300,71 +277,32 @@ class DelegateKernel {
     return absl::OkStatus();
   }
 
-#ifdef TFLITE_GPU_CL
-  absl::Status InitializeOpenClApi(GraphFloat32* graph,
-                                   std::unique_ptr<InferenceBuilder>* builder,
-                                   bool* graph_is_destroyed) {
-    *graph_is_destroyed = false;
-    cl::InferenceEnvironmentOptions env_options;
-    cl::InferenceEnvironmentProperties properties;
-    RETURN_IF_ERROR(cl::NewInferenceEnvironment(env_options, &cl_environment_,
-                                                &properties));
-    auto delegate_options = delegate_->options();
-    cl::InferenceOptions options;
-    // If is_precision_loss_allowed == -1, then just use priorities instead
-    // of paying attention to is_precision_loss_allowed value.
-    if (delegate_options.is_precision_loss_allowed == -1) {
-      options.priority1 = ToPriority(delegate_options.inference_priority1);
-      options.priority2 = ToPriority(delegate_options.inference_priority2);
-      options.priority3 = ToPriority(delegate_options.inference_priority3);
-    } else {
-      // Users set is_precision_loss_allowed explicitly, thus use it explicitly.
-      if (delegate_options.is_precision_loss_allowed == 0) {
-        options.priority1 = InferencePriority::MAX_PRECISION;
-      } else {
-        options.priority1 = InferencePriority::MIN_LATENCY;
-      }
-    }
-    options.usage = ToUsage(delegate_options.inference_preference);
-    *graph_is_destroyed = true;
-    RETURN_IF_ERROR(cl_environment_->NewInferenceBuilder(
-        options, std::move(*graph), builder));
-    TFLITE_LOG_PROD_ONCE(tflite::TFLITE_LOG_INFO,
-                         "Initialized OpenCL-based API.");
-    return absl::OkStatus();
-  }
-#endif // TFLITE_GPU_CL
-
-#ifdef TFLITE_GPU_GL
-  absl::Status InitializeOpenGlApi(GraphFloat32* graph,
-                                   std::unique_ptr<InferenceBuilder>* builder) {
-    gl::InferenceEnvironmentOptions env_options;
-    gl::InferenceEnvironmentProperties properties;
+  absl::Status InitializeDirectMLApi(GraphFloat32* graph, std::unique_ptr<InferenceBuilder>* builder,
+                                     DMLDevice* dml_device,
+                                     ID3D12Device* d3d_device) {
+    InferenceEnvironmentOptions env_options;
+    env_options.dml_device = dml_device;
+    env_options.d3d_device = d3d_device;
+    InferenceEnvironmentProperties properties;
     RETURN_IF_ERROR(
-        NewInferenceEnvironment(env_options, &gl_environment_, &properties));
+        NewInferenceEnvironment(env_options, &dml_environment_, &properties));
     auto delegate_options = delegate_->options();
-    gl::InferenceOptions options;
+    InferenceOptions options;
     options.usage = ToUsage(delegate_options.inference_preference);
     options.priority1 = ToPriority(delegate_options.inference_priority1);
     options.priority2 = ToPriority(delegate_options.inference_priority2);
     options.priority3 = ToPriority(delegate_options.inference_priority3);
-    RETURN_IF_ERROR(gl_environment_->NewInferenceBuilder(std::move(*graph),
-                                                         options, builder));
-    enforce_same_thread_ = true;
+    RETURN_IF_ERROR(dml_environment_->NewInferenceBuilder(
+        options, std::move(*graph), builder));
+
     TFLITE_LOG_PROD_ONCE(tflite::TFLITE_LOG_INFO,
-                         "Initialized OpenGL-based API.");
+                         "Initialized DirectML-based API.");
     return absl::OkStatus();
   }
-#endif // TFLITE_GPU_GL
 
   // The Delegate instance that's shared across all DelegateKernel instances.
   Delegate* const delegate_;  // doesn't own the memory.
-#ifdef TFLITE_GPU_CL
-  std::unique_ptr<cl::InferenceEnvironment> cl_environment_;
-#endif // TFLITE_GPU_CL
-#ifdef TFLITE_GPU_GL
-  std::unique_ptr<gl::InferenceEnvironment> gl_environment_;
-#endif // TFLITE_GPU_GL
+  std::unique_ptr<InferenceEnvironment> dml_environment_;
   std::unique_ptr<InferenceRunner> runner_;
   std::vector<int64_t> input_indices_;
   std::vector<int64_t> output_indices_;
@@ -393,9 +331,15 @@ TfLiteStatus DelegatePrepare(TfLiteContext* context, TfLiteDelegate* delegate) {
         auto* gpu_delegate = GetDelegate(params->delegate);
         // Everything below should happen in prepare function call, but TFLite
         // for whatever reason forbids that.
+        auto status = gpu_delegate->Prepare(context, params);
+        if (!status.ok()) {
+          TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate Prepare: %s",
+                             std::string(status.message()).c_str());
+          return nullptr;
+        }
         auto gpu_delegate_kernel =
             absl::make_unique<DelegateKernel>(gpu_delegate);
-        const auto status = gpu_delegate_kernel->Prepare(context, params);
+        status = gpu_delegate_kernel->Prepare(context, params);
         if (!status.ok()) {
           TF_LITE_KERNEL_LOG(context, "TfLiteGpuDelegate Init: %s",
                              std::string(status.message()).c_str());
@@ -457,6 +401,7 @@ TfLiteStatus DelegatePrepare(TfLiteContext* context, TfLiteDelegate* delegate) {
 }
 
 }  // namespace
+}  // namespace dml
 }  // namespace gpu
 }  // namespace tflite
 
@@ -470,18 +415,18 @@ TfLiteGpuDelegateOptionsV2 TfLiteGpuDelegateOptionsV2Default() {
   options.inference_priority3 = TFLITE_GPU_INFERENCE_PRIORITY_AUTO;
   options.experimental_flags = TFLITE_GPU_EXPERIMENTAL_FLAGS_NONE;
   options.max_delegated_partitions = 1;
-  options.device = 0;
+  options.d3d_device = nullptr;
   return options;
 }
 
 TfLiteDelegate* TfLiteGpuDelegateV2Create(
     const TfLiteGpuDelegateOptionsV2* options) {
-  auto* gpu_delegate = new tflite::gpu::Delegate(options);
+  auto* gpu_delegate = new tflite::gpu::dml::Delegate(options);
   TFLITE_LOG_PROD_ONCE(tflite::TFLITE_LOG_INFO,
                        "Created TensorFlow Lite delegate for GPU.");
   return gpu_delegate ? gpu_delegate->tflite_delegate() : nullptr;
 }
 
 void TfLiteGpuDelegateV2Delete(TfLiteDelegate* delegate) {
-  delete tflite::gpu::GetDelegate(delegate);
+  delete tflite::gpu::dml::GetDelegate(delegate);
 }

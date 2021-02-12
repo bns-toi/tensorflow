@@ -23,6 +23,7 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/api.h"
 #include "tensorflow/lite/delegates/gpu/common/model.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
+#include "tensorflow/lite/delegates/gpu/dml/dml_device.h"
 
 namespace tflite {
 namespace gpu {
@@ -46,7 +47,8 @@ class InferenceEnvironment {
 };
 
 struct InferenceEnvironmentOptions {
-  ID3D12Device* device = nullptr;
+  dml::DMLDevice* dml_device = nullptr;
+  ID3D12Device* d3d_device = nullptr;
 };
 
 // Creates a new DirectML environment that needs to stay around until all
