@@ -86,10 +86,10 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
   const uint32_t num_input = input_resources.size();
   buffer_bindings.resize(num_input);
   for (uint32_t i = 0; i < num_input; i++) {
-    if (i == 0) {
+    auto resource = input_resources[i];
+    if (external_objects_->IsRegistered(resource)) {
       buffer_bindings[i] = {nullptr, 0, 0};
     } else {
-      auto resource = input_resources[i];
       buffer_bindings[i] = {resource->Get(), 0, resource->bytes_size()};
     }
   }
@@ -138,8 +138,10 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
   device->CloseExecuteResetWait();
 
 #if DML_MANAGED_WEIGHTS
-  for (uint32_t i = 1; i < num_input; i++) {
-    input_resources[i] = nullptr;
+  for (uint32_t i = 0; i < num_input; i++) {
+    if (buffer_bindings[i].Buffer) {
+      input_resources[i] = nullptr;
+    }
   }
   const_objects_.RemoveAllResource();
 #endif // DML_MANAGED_WEIGHTS
@@ -197,8 +199,8 @@ absl::Status Runtime::Execute() {
   input_bindings.resize(num_input);
   for (uint32_t i = 0; i < num_input; i++) {
 #if DML_MANAGED_WEIGHTS
-    if (i == 0) {
-      auto resource = input_resources[i];
+    auto resource = input_resources[i];
+    if (resource) {
       buffer_bindings[i] = {resource->Get(), 0, resource->bytes_size()};
       input_bindings[i] = {DML_BINDING_TYPE_BUFFER, &buffer_bindings[i]};
     } else {

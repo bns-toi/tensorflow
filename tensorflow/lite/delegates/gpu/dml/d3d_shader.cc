@@ -90,12 +90,14 @@ void D3DShader::Release() {
 struct ImageLayoutCB {
   UINT Height;
   UINT Width;
+  UINT Channels;
 };
 
 // Divide and round up
 static UINT DivUp(UINT a, UINT b) { return (a + b - 1) / b; }
 
 absl::Status D3DShader::Dispatch(DMLDevice* device, UINT width, UINT height,
+                                 UINT channels,
                                  const DirectMlResource* input,
                                  const DirectMlResource* output) {
 
@@ -160,8 +162,9 @@ absl::Status D3DShader::Dispatch(DMLDevice* device, UINT width, UINT height,
   ImageLayoutCB imageLayoutCB = {};
   imageLayoutCB.Height = height;
   imageLayoutCB.Width = width;
+  imageLayoutCB.Channels = channels;
 
-  device->command_list->SetComputeRoot32BitConstants(0, 2, &imageLayoutCB, 0);
+  device->command_list->SetComputeRoot32BitConstants(0, 3, &imageLayoutCB, 0);
 
   D3D12_GPU_DESCRIPTOR_HANDLE handle =
       descriptor_heap->GetGPUDescriptorHandleForHeapStart();

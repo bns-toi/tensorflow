@@ -41,6 +41,8 @@ class ObjectManager {
   // Return a permanent pointer to a resource for the given id or nullptr.
   D3DResource* FindResource(uint32_t id) const;
 
+  bool IsRegistered(D3DResource* resource) const;
+
  private:
   std::vector<std::unique_ptr<D3DResource>> resources_;
 };

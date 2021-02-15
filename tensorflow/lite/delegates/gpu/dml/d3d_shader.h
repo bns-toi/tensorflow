@@ -33,6 +33,7 @@ class D3DShader {
   absl::Status Compile(DMLDevice* device, const std::string& shader_source);
   void Release();
   absl::Status Dispatch(DMLDevice* device, UINT width, UINT height,
+                        UINT channels,
                         const DirectMlResource* input,
                         const DirectMlResource* output);
 

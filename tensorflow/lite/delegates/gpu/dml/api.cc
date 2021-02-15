@@ -320,7 +320,8 @@ class TwoStepTensorTie : public TensorTie {
     inner_def.external_def.object_def.user_provided = false;
     // Reflects what is actually supported by compiler.
     inner_def.internal_def.dimensions = inner_def.external_def.dimensions;
-    inner_def.internal_def.object_def.data_type = DataType::FLOAT32;
+    inner_def.internal_def.object_def.data_type =
+        inner_def.external_def.object_def.data_type;
     inner_def.internal_def.object_def.data_layout = DataLayout::DHWC4;
     inner_def.internal_def.object_def.object_type = ObjectType::DIRECTML_RESOURCE;
     // It may allocate another internal object and should register it to
@@ -430,35 +431,39 @@ class InferenceRunnerImpl : public InferenceRunner {
     return outputs_[index]->SetExternalObject(object);
   }
 
-  absl::Status Run() override {
 #ifdef _DEBUG
+    #define DUMP_TIME
+#endif  // _DEBUG
+
+  absl::Status Run() override {
+#ifdef DUMP_TIME
     auto start = std::chrono::system_clock::now();
-#endif // _DEBUG
+#endif // DUMP_TIME
     for (auto& obj : inputs_) {
       RETURN_IF_ERROR(obj->CopyFromExternalObject());
     }
-#ifdef _DEBUG
+#ifdef DUMP_TIME
     auto end = std::chrono::system_clock::now();
     auto msec = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << msec << " ms \n";
+    std::cout << "CopyFrom : " << msec << " ms \n";
     start = std::chrono::system_clock::now();
-#endif // _DEBUG
+#endif // DUMP_TIME
     RETURN_IF_ERROR(runtime_->Execute());
-#ifdef _DEBUG
+#ifdef DUMP_TIME
     end = std::chrono::system_clock::now();
     msec = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << msec << " ms \n";
+    std::cout << "Execute : " << msec << " ms \n";
     start = std::chrono::system_clock::now();
-#endif // _DEBUG
+#endif // DUMP_TIME
     for (auto& obj : outputs_) {
       RETURN_IF_ERROR(obj->CopyToExternalObject());
     }
-#ifdef _DEBUG
+#ifdef DUMP_TIME
     end = std::chrono::system_clock::now();
     msec = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
-    std::cout << msec << " ms \n";
+    std::cout << "CopyTo : " << msec << " ms \n";
     start = std::chrono::system_clock::now();
-#endif // _DEBUG
+#endif // DUMP_TIME
     return absl::OkStatus();
   }
 
@@ -579,7 +584,7 @@ class InferenceBuilderImpl : public InferenceBuilder {
       // format.
       const auto& shape = value->tensor.shape;
       external_def.dimensions = Dimensions(shape.b, shape.h, shape.w, shape.c);
-      external_def.object_def.data_type = DataType::FLOAT32;
+      external_def.object_def.data_type = value->tensor.type;
       external_def.object_def.data_layout = DataLayout::DHWC4;
       external_def.object_def.object_type = gpu::ObjectType::DIRECTML_RESOURCE;
 

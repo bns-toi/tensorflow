@@ -46,6 +46,15 @@ D3DResource* ObjectManager::FindResource(uint32_t id) const {
   return id >= resources_.size() ? nullptr : resources_[id].get();
 }
 
+bool ObjectManager::IsRegistered(D3DResource* resource) const {
+  for (int i = 0; i < resources_.size(); i++) {
+    if (resources_[i].get() == resource) {
+      return true;
+    }
+  }
+  return false;
+}
+
 }  // namespace dml
 }  // namespace gpu
 }  // namespace tflite

@@ -470,7 +470,6 @@ TfLiteGpuDelegateOptionsV2 TfLiteGpuDelegateOptionsV2Default() {
   options.inference_priority3 = TFLITE_GPU_INFERENCE_PRIORITY_AUTO;
   options.experimental_flags = TFLITE_GPU_EXPERIMENTAL_FLAGS_NONE;
   options.max_delegated_partitions = 1;
-  options.device = 0;
   return options;
 }
 

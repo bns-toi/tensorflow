@@ -55,7 +55,7 @@ class DirectMllShaderConverterImpl : public DirectMllConverterImpl {
 
   absl::Status Dispatch(const DirectMlResource* input,
                         const DirectMlResource* output) {
-    return shader.Dispatch(device_, shape_.w, shape_.h, input, output);
+    return shader.Dispatch(device_, shape_.w, shape_.h, shape_.c, input, output);
   }
 
  protected:
@@ -96,6 +96,7 @@ class FromTensorConverter : public DirectMllShaderConverterImpl {
     cbuffer cbCS {
       uint height;
       uint width;
+      uint channels;
     };
 
     [numthreads(32, 16, 1)]
@@ -105,10 +106,9 @@ class FromTensorConverter : public DirectMllShaderConverterImpl {
       if (x < width && y < height) {
         uint index = width * y + x;
         uint planeSize = height * width;
-        output[index * 4] = input[index];
-        output[index * 4 + 1] = input[index + planeSize];
-        output[index * 4 + 2] = input[index + planeSize * 2];
-        output[index * 4 + 3] = input[index + planeSize * 3];
+        for (uint c = 0; c < channels; c++) {
+          output[index * channels + c] = input[index + planeSize * c];
+        }
       }
     })");
   }
@@ -161,6 +161,7 @@ class ToTensorConverter : public DirectMllShaderConverterImpl {
     cbuffer cbCS {
       uint height;
       uint width;
+      uint channels;
     };
 
     [numthreads(32, 16, 1)]
@@ -170,10 +171,9 @@ class ToTensorConverter : public DirectMllShaderConverterImpl {
       if (x < width && y < height) {
         uint index = width * y + x;
         uint planeSize = height * width;
-        output[index] = input[index * 4];
-        output[index + planeSize] = input[index * 4 + 1];
-        output[index + planeSize * 2] = input[index * 4 + 2];
-        output[index + planeSize * 3] = input[index * 4 + 3];
+        for (uint c = 0; c < channels; c++) {
+          output[index + planeSize * c] = input[index * channels + c];
+        }
       }
     })");
   }
