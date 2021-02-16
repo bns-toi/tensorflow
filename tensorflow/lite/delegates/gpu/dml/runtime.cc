@@ -21,8 +21,11 @@ namespace tflite {
 namespace gpu {
 namespace dml {
 
-Runtime::Runtime(DMLDevice* device_, const ObjectManager* external_objects)
-    : device(device_), external_objects_(external_objects) {}
+Runtime::Runtime(DMLDevice* device_, const ObjectManager* external_objects,
+                 bool allow_precision_loss)
+  : device(device_),
+    external_objects_(external_objects),
+    allow_precision_loss_(allow_precision_loss) {}
 
 absl::Status Runtime::Compile(const GraphFloat32& graph) {
   // Compile operator
@@ -149,9 +152,11 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
   return absl::OkStatus();
 }
 
-D3DResource* Runtime::AllocateConstObject(const uint8_t* data, uint32_t size) {
+D3DResource* Runtime::AllocateConstObject(const uint8_t* data,
+                                          DML_TENSOR_DATA_TYPE data_type,
+                                          uint32_t size) {
   D3DResource d3d_resource;
-  CreateResource(device, AccessType::WRITE, size, &d3d_resource);
+  CreateResource(device, AccessType::WRITE, data_type, size, &d3d_resource);
 
   const_objects_.RegisterResource(next_const_id_, d3d_resource);
   D3DResource* resource = const_objects_.FindResource(next_const_id_);

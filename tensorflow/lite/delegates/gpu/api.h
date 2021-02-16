@@ -172,10 +172,15 @@ struct VulkanMemory {
 #ifdef TFLITE_GPU_DML
 struct DirectMlResource {
   DirectMlResource() = default;
-  explicit DirectMlResource(ID3D12Resource* resource_)
-      : resource(resource_) {}
+  explicit DirectMlResource(ID3D12Resource* new_resource,
+                            DML_TENSOR_DATA_TYPE new_data_type,
+                            size_t new_size_bytes)
+      : resource(new_resource), data_type(new_data_type), size_bytes(new_size_bytes) {}
 
-  ID3D12Resource* resource;
+  ID3D12Resource* resource = nullptr;
+  DML_TENSOR_DATA_TYPE data_type;
+  size_t size_bytes = 0;
+
 };
 #endif // TFLITE_GPU_DML
 

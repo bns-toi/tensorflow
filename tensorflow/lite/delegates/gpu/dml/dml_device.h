@@ -47,6 +47,8 @@ class DMLDevice {
   Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> command_list;
 
   Microsoft::WRL::ComPtr<IDMLDevice> dml_device;
+
+  bool is_fp16_supported;
 };
 
 absl::Status CreateDefaultGPUDevice(DMLDevice* result);

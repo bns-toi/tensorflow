@@ -104,21 +104,16 @@ absl::Status D3DShader::Dispatch(DMLDevice* device, UINT width, UINT height,
   if (init_uav == false) {
     init_uav = true;
 
-#if DML_DATA_TYPE_HALF
-    const UINT data_size = sizeof(uint16_t);
-#else  // DML_DATA_TYPE_HALF
-    const UINT data_size = sizeof(float);
-#endif // DML_DATA_TYPE_HALF
-
     // Describe and create a UAV for the input tensor.
     D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
-#if DML_DATA_TYPE_HALF
-    uav_desc.Format = DXGI_FORMAT_R16_FLOAT;
-#else // DML_DATA_TYPE_HALF
-    uav_desc.Format = DXGI_FORMAT_R32_FLOAT;
-#endif // DML_DATA_TYPE_HALF
+    uav_desc.Format = input->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
+                          ? DXGI_FORMAT_R32_FLOAT
+                          : DXGI_FORMAT_R16_FLOAT;
     uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
     uav_desc.Buffer.FirstElement = 0;
+    UINT data_size = input->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
+                         ? sizeof(float)
+                         : sizeof(uint16_t);
     uav_desc.Buffer.NumElements =
         static_cast<UINT>(input->resource->GetDesc().Width / data_size);
     uav_desc.Buffer.StructureByteStride = 0;
@@ -133,15 +128,17 @@ absl::Status D3DShader::Dispatch(DMLDevice* device, UINT width, UINT height,
     // Describe and create a SRV for the final result tensor.
     D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
     srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-#if DML_DATA_TYPE_HALF
-    srv_desc.Format = DXGI_FORMAT_R16_FLOAT;
-#else // DML_DATA_TYPE_HALF
-    srv_desc.Format = DXGI_FORMAT_R32_FLOAT;
-#endif // DML_DATA_TYPE_HALF
+    srv_desc.Format = output->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
+                          ? DXGI_FORMAT_R32_FLOAT
+                          : DXGI_FORMAT_R16_FLOAT;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
     srv_desc.Buffer.FirstElement = 0;
+    data_size = output->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
+                    ? sizeof(float)
+                    : sizeof(uint16_t);
     srv_desc.Buffer.NumElements =
         static_cast<UINT>(output->resource->GetDesc().Width / data_size);
+    //        static_cast<UINT>(output->resource->GetDesc().Width / data_size);
     srv_desc.Buffer.StructureByteStride = 0;
     srv_desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
 

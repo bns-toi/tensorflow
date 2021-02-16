@@ -21,12 +21,6 @@ namespace tflite {
 namespace gpu {
 namespace dml {
 
-absl::Status GetResourceSize(ID3D12Resource* resource, int64_t* size_bytes) {
-  D3D12_RESOURCE_DESC desc = resource->GetDesc();
-  *size_bytes = desc.Width;
-  return absl::OkStatus();
-}
-
 D3DResource::~D3DResource() {
 
 }
@@ -117,8 +111,8 @@ absl::Status D3DResource::Copy(DMLDevice* device,
   return CopyResource(device, src_resource);
 }
 
-absl::Status CreateResource(DMLDevice* device,
-                            AccessType access_type, UINT64 size,
+absl::Status CreateResource(DMLDevice* device, AccessType access_type,
+                            DML_TENSOR_DATA_TYPE data_type, UINT64 size,
                             D3DResource* d3d_resource) {
   ComPtr<ID3D12Resource> resource;
 
@@ -131,7 +125,7 @@ absl::Status CreateResource(DMLDevice* device,
       nullptr,
       IID_PPV_ARGS(&resource)));
 
-  *d3d_resource = D3DResource(resource, size);
+  *d3d_resource = D3DResource(resource, data_type, size);
   return absl::OkStatus();
 }
 

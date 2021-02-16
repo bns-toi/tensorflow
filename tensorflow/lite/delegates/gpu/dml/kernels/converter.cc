@@ -30,9 +30,7 @@ namespace {
 
 absl::Status WrapResource(DirectMlResource resource,
                           D3DResource* d3d_resource) {
-  int64_t size_bytes;
-  RETURN_IF_ERROR(GetResourceSize(resource.resource, &size_bytes));
-  *d3d_resource = D3DResource(resource.resource, size_bytes);
+  *d3d_resource = D3DResource(resource.resource, resource.data_type, resource.size_bytes);
   return absl::OkStatus();
 }
 
@@ -64,7 +62,7 @@ class DirectMllShaderConverterImpl : public DirectMllConverterImpl {
 };
 
 bool IsSupportedDataType(DataType type) {
-  return /* == DataType::FLOAT16 || */type == DataType::FLOAT32;
+  return type == DataType::FLOAT16 || type == DataType::FLOAT32;
 }
 
 class FromTensorConverter : public DirectMllShaderConverterImpl {

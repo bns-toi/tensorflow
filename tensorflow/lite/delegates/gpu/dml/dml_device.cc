@@ -57,7 +57,8 @@ class UniqueHandle {
 
 DMLDevice::DMLDevice(Microsoft::WRL::ComPtr<ID3D12Device>& device)
     : d3d_device_ptr(device),
-      d3d_device(d3d_device_ptr.Get()) {}
+      d3d_device(d3d_device_ptr.Get()),
+      is_fp16_supported(false) {}
 
 DMLDevice::DMLDevice(ID3D12Device* device)
     : d3d_device(device) {}
@@ -94,10 +95,7 @@ void DMLDevice::Init() {
   DML_CHECK_SUCCEEDED(dml_device->CheckFeatureSupport(
       DML_FEATURE_TENSOR_DATA_TYPE_SUPPORT, sizeof(fp16Query), &fp16Query,
       sizeof(fp16Supported), &fp16Supported));
-
- if (!fp16Supported.IsSupported) {
-    throw std::exception("FP16 data type support is required for this sample.");
- }
+  is_fp16_supported = fp16Supported.IsSupported;
 }
 
 absl::Status CreateDefaultGPUDevice(DMLDevice* result) {

@@ -34,10 +34,17 @@ class D3DResource {
  public:
   D3DResource() {}
   D3DResource(Microsoft::WRL::ComPtr<ID3D12Resource>& resource,
+              DML_TENSOR_DATA_TYPE data_type,
               size_t bytes_size)
-      : resource_(resource), resource_ptr(resource_.Get()), bytes_size_(bytes_size) {}
-  D3DResource(ID3D12Resource* resource, size_t bytes_size)
-      : resource_ptr(resource), bytes_size_(bytes_size) {}
+      : resource_(resource),
+        resource_ptr(resource_.Get()),
+        data_type_(data_type),
+        bytes_size_(bytes_size) {}
+  D3DResource(ID3D12Resource* resource, DML_TENSOR_DATA_TYPE data_type,
+              size_t bytes_size)
+      : resource_ptr(resource),
+        data_type_(data_type),
+        bytes_size_(bytes_size) {}
 
   ~D3DResource();
 
@@ -53,11 +60,13 @@ class D3DResource {
   absl::Status Copy(DMLDevice* device, const D3DResource& src_resource);
 
   ID3D12Resource* Get() const { return resource_ptr; }
+  DML_TENSOR_DATA_TYPE data_type() const { return data_type_; }
   size_t bytes_size() const { return bytes_size_; }
 
  private:
   Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
   ID3D12Resource* resource_ptr;
+  DML_TENSOR_DATA_TYPE data_type_;
   size_t bytes_size_;
 
   absl::Status ReadResource(DMLDevice* device, void* data) const;
@@ -65,10 +74,8 @@ class D3DResource {
   absl::Status CopyResource(DMLDevice* device, const D3DResource& src_resource);
 };
 
-absl::Status GetResourceSize(ID3D12Resource* resource, int64_t* size_bytes);
-
-absl::Status CreateResource(DMLDevice* device,
-                            AccessType access_type, UINT64 size,
+absl::Status CreateResource(DMLDevice* device, AccessType access_type,
+                            DML_TENSOR_DATA_TYPE data_type, UINT64 size,
                             D3DResource* d3d_resource);
 
 template <typename T>

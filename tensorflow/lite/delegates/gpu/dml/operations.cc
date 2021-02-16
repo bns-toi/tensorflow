@@ -243,23 +243,22 @@ absl::Status Runtime::CreateOperator(const GraphFloat32& graph) {
   }
 
   // Compile
-#if DML_DATA_TYPE_HALF
   DML_EXECUTION_FLAGS execution_flags =
-      DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION;
-#else   // DML_DATA_TYPE_HALF
-  DML_EXECUTION_FLAGS execution_flags = DML_EXECUTION_FLAG_NONE;
-#endif  // DML_DATA_TYPE_HALF
+    allow_precision_loss_
+      ? DML_EXECUTION_FLAG_ALLOW_HALF_PRECISION_COMPUTATION
+      : DML_EXECUTION_FLAG_NONE;
   compiled_operator = scope.Compile(execution_flags, {last_output});
 
   return absl::OkStatus();
 }
 
 absl::Status Runtime::CreateInputTensorExpression(
-    ::dml::Scope& scope,
-    DML_TENSOR_FLAGS flags,
+    ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
     const ::dml::TensorPolicy& policy,
-    const Value* value,
-    ::dml::Expression& output) {
+    const Value* value, ::dml::Expression& output) {
+  DML_TENSOR_DATA_TYPE data_type = allow_precision_loss_
+                                     ? DML_TENSOR_DATA_TYPE_FLOAT16
+                                     : DML_TENSOR_DATA_TYPE_FLOAT32;
   uint32_t index = input_resources.size();
   input_resources.push_back(external_objects_->FindResource(value->id));
 
@@ -267,9 +266,8 @@ absl::Status Runtime::CreateInputTensorExpression(
   UINT tensor_sizes[4] = {shape.b, shape.c, shape.h, shape.w};
   ::dml::TensorDesc::Dimensions dimensions(std::begin(tensor_sizes),
                                            std::end(tensor_sizes));
-  output = ::dml::InputTensor(
-      scope, index,
-      ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, dimensions, policy));
+  output = ::dml::InputTensor(scope, index,
+                              ::dml::TensorDesc(data_type, dimensions, policy));
 
   return absl::OkStatus();
 }
@@ -277,14 +275,17 @@ absl::Status Runtime::CreateInputTensorExpression(
 absl::Status Runtime::CreateConstInputTensorExpression(
     ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
     const ::dml::TensorPolicy& policy, const uint8_t* data,
-    DML_TENSOR_DATA_TYPE data_type, const uint32_t* sizes,
+    const uint32_t* sizes,
     ::dml::Expression& output) {
+  DML_TENSOR_DATA_TYPE data_type = allow_precision_loss_
+                                     ? DML_TENSOR_DATA_TYPE_FLOAT16
+                                     : DML_TENSOR_DATA_TYPE_FLOAT32;
   uint32_t strides[4];
   GetStrides(sizes, /*m_tensorLayout,*/ strides);
   uint64_t buffer_size = DMLCalcBufferTensorSize(data_type, 4, sizes, strides);
 
   uint32_t index = input_resources.size();
-  D3DResource* resource = AllocateConstObject(data, buffer_size);
+  D3DResource* resource = AllocateConstObject(data, data_type, buffer_size);
   input_resources.push_back(resource);
 
   ::dml::TensorDesc::Dimensions dimensions = {sizes[0], sizes[1], sizes[2],
@@ -326,29 +327,22 @@ absl::Status Runtime::CreateConcatExpression(
   return absl::OkStatus();
 }
 
-absl::Status Runtime::CreateConvolution2DExpression(
-    ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
-    const ::dml::TensorPolicy& policy, const GraphFloat32& graph,
-    const Node* node, OperationType activation_type,
-    const std::vector<::dml::Expression>& inputs,
-    std::vector<::dml::Expression>& outputs) {
-  auto attr =
-      absl::any_cast<Convolution2DAttributes>(node->operation.attributes);
+void SetValue(uint16_t& output, const float& input) {
+  output = Float16Compressor::compress(input);
+}
 
-#if 1
-  // Weights Expression
-  const auto& weights_shape = attr.weights.shape;
+void SetValue(float& output, const float& input) {
+  output = input;
+}
 
-#if DML_DATA_TYPE_HALF
-  std::vector<uint16_t> gpu_data;
-  UINT data_size = sizeof(uint16_t);
-  DML_TENSOR_DATA_TYPE data_type = DML_TENSOR_DATA_TYPE_FLOAT16;
-#else   // DML_DATA_TYPE_HALF
-  std::vector<float> gpu_data;
-  UINT data_size = sizeof(float);
-  DML_TENSOR_DATA_TYPE data_type = DML_TENSOR_DATA_TYPE_FLOAT32;
-#endif  // DML_DATA_TYPE_HALF
+template <typename T>
+absl::Status CreateWeightsTensorExpression(
+    Runtime* runtime, ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+    const ::dml::TensorPolicy& policy,
+    const Tensor<OHWI, DataType::FLOAT32>& weights, ::dml::Expression& output) {
+  const auto& weights_shape = weights.shape;
 
+  std::vector<T> gpu_data;
   gpu_data.resize(weights_shape.o * weights_shape.h * weights_shape.w *
                   weights_shape.i);
   for (uint32_t o = 0; o < weights_shape.o; o++) {
@@ -359,13 +353,9 @@ absl::Status Runtime::CreateConvolution2DExpression(
               o * weights_shape.i * weights_shape.h * weights_shape.w;
           uint32_t idx = w + h * weights_shape.w;
 
-          gpu_data[offset + idx + i * weights_shape.h * weights_shape.w] =
-#if DML_DATA_TYPE_HALF
-              Float16Compressor::compress(
-                  attr.weights.data[offset + idx * weights_shape.i + i]);
-#else   // DML_DATA_TYPE_HALF
-              attr.weights.data[offset + idx * weights_shape.i + i];
-#endif  // DML_DATA_TYPE_HALF
+          SetValue(
+              gpu_data[offset + idx + i * weights_shape.h * weights_shape.w],
+              weights.data[offset + idx * weights_shape.i + i]);
         }
       }
     }
@@ -373,35 +363,68 @@ absl::Status Runtime::CreateConvolution2DExpression(
 
   UINT weights_tensor_sizes[4] = {weights_shape.o, weights_shape.i,
                                   weights_shape.h, weights_shape.w};
-  ::dml::Expression filter;
-  RETURN_IF_ERROR(CreateConstInputTensorExpression(
-      scope, flags, policy, reinterpret_cast<const uint8_t*>(gpu_data.data()),
-      data_type,
-      weights_tensor_sizes, filter));
 
-  // Bias Expression
-  const auto& bias_shape = attr.bias.shape;
-  UINT bias_tensor_sizes[4] = {1, bias_shape.v, 1, 1};
-  const UINT num_bias = attr.bias.data.size();
-#if DML_DATA_TYPE_HALF
-  gpu_data.clear();
+  return runtime->CreateConstInputTensorExpression(
+      scope, flags, policy, reinterpret_cast<const uint8_t*>(gpu_data.data()),
+      weights_tensor_sizes, output);
+}
+
+absl::Status CreateBiasTensorExpressionHalf(
+    Runtime* runtime, ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+    const ::dml::TensorPolicy& policy,
+    const Tensor<Linear, DataType::FLOAT32>& bias, ::dml::Expression& output) {
+  const auto& bias_shape = bias.shape;
+
+  std::vector<uint16_t> gpu_data;
+  const UINT num_bias = bias.data.size();
   gpu_data.reserve(num_bias);
-  for (auto bias : attr.bias.data) {
+  for (auto bias : bias.data) {
     gpu_data.push_back(Float16Compressor::compress(bias));
   }
-#endif  // DML_DATA_TYPE_HALF
+
+  UINT bias_tensor_sizes[4] = {1, bias_shape.v, 1, 1};
+
+  return runtime->CreateConstInputTensorExpression(
+      scope, flags, policy, reinterpret_cast<const uint8_t*>(gpu_data.data()),
+      bias_tensor_sizes, output);
+}
+
+absl::Status CreateBiasTensorExpression(
+    Runtime* runtime, ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+    const ::dml::TensorPolicy& policy,
+    const Tensor<Linear, DataType::FLOAT32>& bias, ::dml::Expression& output) {
+  const auto& bias_shape = bias.shape;
+
+  UINT bias_tensor_sizes[4] = {1, bias_shape.v, 1, 1};
+
+  return runtime->CreateConstInputTensorExpression(
+      scope, flags, policy,
+      reinterpret_cast<const uint8_t*>(bias.data.data()),
+      bias_tensor_sizes, output);
+}
+
+absl::Status Runtime::CreateConvolution2DExpression(
+    ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+    const ::dml::TensorPolicy& policy, const GraphFloat32& graph,
+    const Node* node, OperationType activation_type,
+    const std::vector<::dml::Expression>& inputs,
+    std::vector<::dml::Expression>& outputs) {
+  auto attr =
+      absl::any_cast<Convolution2DAttributes>(node->operation.attributes);
+
+#if 1
+  // Weights & Bias Expression
+  ::dml::Expression filter;
   ::dml::Expression bias;
-#if DML_DATA_TYPE_HALF
-  RETURN_IF_ERROR(CreateConstInputTensorExpression(
-      scope, flags, policy,
-      reinterpret_cast<const uint8_t*>(gpu_data.data()),
-      data_type, bias_tensor_sizes, bias));
-#else   // DML_DATA_TYPE_HALF
-  RETURN_IF_ERROR(CreateConstInputTensorExpression(
-      scope, flags, policy,
-      reinterpret_cast<const uint8_t*>(attr.bias.data.data()),
-      data_type, bias_tensor_sizes, bias));
-#endif  // DML_DATA_TYPE_HALF
+  if (allow_precision_loss_) {
+    CreateWeightsTensorExpression<uint16_t>(this, scope, flags, policy,
+                                            attr.weights, filter);
+    CreateBiasTensorExpressionHalf(this, scope, flags, policy, attr.bias, bias);
+  } else {
+    CreateWeightsTensorExpression<float>(this, scope, flags, policy,
+                                            attr.weights, filter);
+    CreateBiasTensorExpression(this, scope, flags, policy, attr.bias, bias);
+  }
 
   // Parameters
   const uint32_t strides[2] = {attr.strides.h, attr.strides.w};

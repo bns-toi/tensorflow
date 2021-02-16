@@ -39,9 +39,8 @@ namespace dml {
 namespace {
 absl::Status WrapResource(DirectMlResource resource,
                           D3DResource* d3d_resource) {
-  int64_t size_bytes;
-  RETURN_IF_ERROR(GetResourceSize(resource.resource, &size_bytes));
-  *d3d_resource = D3DResource(resource.resource, size_bytes);
+  *d3d_resource =
+      D3DResource(resource.resource, resource.data_type, resource.size_bytes);
   return absl::OkStatus();
 }
 
@@ -56,21 +55,14 @@ absl::Status MaybeAllocateD3D12Resource(DMLDevice* device,
   auto& dims = def.dimensions;
   UINT tensor_sizes[4] = {dims.b, dims.c, dims.h, dims.w};
   ::dml::TensorDesc::Dimensions dimensions(std::begin(tensor_sizes), std::end(tensor_sizes));
-  ::dml::TensorDesc desc;
-  switch (def.object_def.data_type) {
-    case DataType::FLOAT32:
-      desc = ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT32, dimensions);
-      break;
-//    case DataType::FLOAT16:
-//      desc = ::dml::TensorDesc(DML_TENSOR_DATA_TYPE_FLOAT16, dimensions);
-//      break;
-    default:
-      return absl::InternalError(
-          "Unable to create new D3D Resource. Unsupported data type.");
-  };
+  DML_TENSOR_DATA_TYPE data_type = def.object_def.data_type == DataType::FLOAT32
+                                       ? DML_TENSOR_DATA_TYPE_FLOAT32
+                                       : DML_TENSOR_DATA_TYPE_FLOAT16;
+  ::dml::TensorDesc desc = ::dml::TensorDesc(data_type, dimensions);
 
   UINT64 tensor_buffer_size = desc.totalTensorSizeInBytes;
-  return CreateResource(device, access_type, tensor_buffer_size, resource);
+  return CreateResource(device, access_type, data_type, tensor_buffer_size,
+                        resource);
 }
 
 // Does one-step conversion between internal and external objects.
@@ -206,7 +198,8 @@ class DefaultTensorTie : public TensorTie {
         D3DResource resource;
         RETURN_IF_ERROR(MaybeAllocateD3D12Resource(
             env->device(), d, def().access_type, &resource));
-        internal_obj_ = DirectMlResource{resource.Get()};
+        internal_obj_ = DirectMlResource{resource.Get(), resource.data_type(),
+                                         resource.bytes_size()};
         RETURN_IF_ERROR(
             objects_->RegisterResource(def().id, std::move(resource)));
         break;
@@ -234,10 +227,15 @@ class DefaultTensorTie : public TensorTie {
       case ObjectType::DIRECTML_RESOURCE: {
         RETURN_IF_ERROR(MaybeAllocateD3D12Resource(
             env->device(), d, def().access_type, &external_resource_));
-        external_obj_ = DirectMlResource{external_resource_.Get()};
+        external_obj_ = DirectMlResource{external_resource_.Get(),
+                                         external_resource_.data_type(),
+                                         external_resource_.bytes_size()};
         D3DResource bbb;
         RETURN_IF_ERROR(
-            WrapResource(DirectMlResource{external_resource_.Get()}, &bbb));
+            WrapResource(DirectMlResource{external_resource_.Get(),
+                                          external_resource_.data_type(),
+                                          external_resource_.bytes_size()},
+                         &bbb));
         break;
       }
       default:
@@ -310,28 +308,27 @@ class TwoStepTensorTie : public TensorTie {
     outer_def.external_def = def.external_def;
     outer_def.internal_def = def.external_def;
     outer_def.internal_def.object_def.object_type = ObjectType::DIRECTML_RESOURCE;
+    // Will not allocate new DirectML Resource
     outer_def.internal_def.object_def.user_provided = true;
 
     TensorTieDef inner_def;
-#if 1
     inner_def.id = def.id;
-    // Should not allocate external object.
     inner_def.external_def = outer_def.internal_def;
+    // Should not allocate external object.
     inner_def.external_def.object_def.user_provided = false;
+#if 1
+    inner_def.internal_def = def.internal_def;
+#else
     // Reflects what is actually supported by compiler.
     inner_def.internal_def.dimensions = inner_def.external_def.dimensions;
     inner_def.internal_def.object_def.data_type =
-        inner_def.external_def.object_def.data_type;
+        DataType::FLOAT16; // DataType::FLOAT32;
     inner_def.internal_def.object_def.data_layout = DataLayout::DHWC4;
     inner_def.internal_def.object_def.object_type = ObjectType::DIRECTML_RESOURCE;
+#endif
     // It may allocate another internal object and should register it to
     // ObjectManager.
     inner_def.internal_def.object_def.user_provided = false;
-#else
-    inner_def.external_def = outer_def.internal_def;
-    inner_def.external_def.object_def.user_provided = false;
-    inner_def.internal_def = def.internal_def;
-#endif
     return std::make_pair(outer_def, inner_def);
   }
 
@@ -499,13 +496,18 @@ class InferenceRunnerImpl : public InferenceRunner {
 
 class InferenceBuilderImpl : public InferenceBuilder {
  public:
-  explicit InferenceBuilderImpl(Environment* environment, GraphFloat32 graph)
-      : environment_(environment),
-        graph_(std::move(graph)) {}
+  explicit InferenceBuilderImpl(const InferenceOptions& options,
+                                Environment* environment, GraphFloat32 graph)
+    : options_(options),
+      environment_(environment),
+      graph_(std::move(graph)),
+      allow_precision_loss_(false) {}
 
-  absl::Status Initialize(const InferenceOptions& options,
-                          const InferenceEnvironmentOptions& env_options) {
-    
+  absl::Status Initialize(const InferenceEnvironmentOptions& env_options) {
+    allow_precision_loss_ =
+        environment_->device()->is_fp16_supported &&
+        GetPosition(options_, InferencePriority::MAX_PRECISION) > 1;
+
     tie_factory_ = absl::make_unique<TensorTieFactory>(environment_);
 
     inputs_ = LinkTensors(graph_.inputs());
@@ -558,8 +560,8 @@ class InferenceBuilderImpl : public InferenceBuilder {
 
   absl::Status Build(std::unique_ptr<InferenceRunner>* runner) override {
     auto external_objects = absl::make_unique<ObjectManager>();
-    auto runtime = absl::make_unique<Runtime>(environment_->device(),
-                                              external_objects.get());
+    auto runtime = absl::make_unique<Runtime>(
+        environment_->device(), external_objects.get(), allow_precision_loss_);
     Runtime* runtime_ptr = runtime.get();
     auto runner_impl = absl::make_unique<InferenceRunnerImpl>(
         environment_, std::move(runtime), std::move(external_objects));
@@ -578,13 +580,13 @@ class InferenceBuilderImpl : public InferenceBuilder {
     std::vector<TensorTieDef> links;
     links.reserve(values.size());
     for (const auto& value : values) {
-#if 1
       TensorObjectDef external_def;
       // So far the compiler always forces inputs and outputs to be in the fixed
       // format.
       const auto& shape = value->tensor.shape;
       external_def.dimensions = Dimensions(shape.b, shape.h, shape.w, shape.c);
-      external_def.object_def.data_type = value->tensor.type;
+      external_def.object_def.data_type =
+          allow_precision_loss_ ? DataType::FLOAT16 : DataType::FLOAT32;
       external_def.object_def.data_layout = DataLayout::DHWC4;
       external_def.object_def.object_type = gpu::ObjectType::DIRECTML_RESOURCE;
 
@@ -599,12 +601,6 @@ class InferenceBuilderImpl : public InferenceBuilder {
       AccessType access =
           graph_.IsGraphInput(value->id) ? AccessType::READ : AccessType::WRITE;
       links.push_back({value->id, access, internal_def, external_def});
-#else
-      TensorObjectDef def = TensorToDef(*context_->GetTensor(value->id));
-      AccessType access =
-          graph.IsGraphInput(value->id) ? AccessType::READ : AccessType::WRITE;
-      links.push_back({value->id, access, def, def});
-#endif
     }
     return links;
   }
@@ -619,8 +615,10 @@ class InferenceBuilderImpl : public InferenceBuilder {
     return defs;
   }
 
+  const InferenceOptions options_;
   Environment* environment_;
   GraphFloat32 graph_;
+  bool allow_precision_loss_;
 
   std::vector<TensorTieDef> inputs_;
   std::vector<TensorTieDef> outputs_;
@@ -671,9 +669,9 @@ class InferenceEnvironmentImpl : public InferenceEnvironment {
 #endif
 
     auto builder_impl = absl::make_unique<InferenceBuilderImpl>(
-        &environment_, std::move(model));
+        resolved_options, & environment_, std::move(model));
     RETURN_IF_ERROR(
-        builder_impl->Initialize(resolved_options, options_));
+        builder_impl->Initialize(options_));
     *builder = std::move(builder_impl);
     return absl::OkStatus();
   }

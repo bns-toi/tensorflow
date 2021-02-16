@@ -38,14 +38,21 @@ namespace dml {
 
 class Runtime {
  public:
-  Runtime(DMLDevice* device, const ObjectManager* external_objects);
+  Runtime(DMLDevice* device, const ObjectManager* external_objects,
+          bool allow_precision_loss);
 
   absl::Status Compile(const GraphFloat32& graph);
   absl::Status Execute();
 
+  absl::Status CreateConstInputTensorExpression(
+      ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
+      const ::dml::TensorPolicy& policy, const uint8_t* data, const UINT* sizes,
+      ::dml::Expression& output);
+
  private:
   DMLDevice* device;
   const ObjectManager* external_objects_;
+  const bool allow_precision_loss_;
   ObjectManager const_objects_;
   uint32_t next_const_id_ = 0;  // id for const objects
 
@@ -60,7 +67,9 @@ class Runtime {
   std::vector<D3DResource*> input_resources;
   std::vector<D3DResource*> output_resources;
 
-  D3DResource* AllocateConstObject(const uint8_t* data, uint32_t size);
+  D3DResource* AllocateConstObject(const uint8_t* data,
+                                   DML_TENSOR_DATA_TYPE data_type,
+                                   uint32_t size);
 
   absl::Status CreateOperator(const GraphFloat32& graph);
 
@@ -68,11 +77,7 @@ class Runtime {
       ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
       const ::dml::TensorPolicy& policy, const Value* value,
       ::dml::Expression& output);
-  absl::Status CreateConstInputTensorExpression(
-      ::dml::Scope& scope, DML_TENSOR_FLAGS flags,
-      const ::dml::TensorPolicy& policy, const uint8_t* data,
-      DML_TENSOR_DATA_TYPE data_type, const UINT* sizes,
-      ::dml::Expression& output);
+
 
   absl::Status CreateAddExpression(const GraphFloat32& graph, const Node* node,
                                    const std::vector<::dml::Expression>& inputs,
@@ -124,7 +129,7 @@ class Runtime {
                                    std::vector<::dml::Expression>& outputs);
 
 
-  };
+};
 
 }  // namespace dml
 }  // namespace gpu
