@@ -32,6 +32,7 @@ limitations under the License.
 #include "tensorflow/lite/delegates/gpu/common/quantization_util.h"
 #include "tensorflow/lite/delegates/gpu/common/status.h"
 #include "tensorflow/lite/delegates/gpu/dml/api.h"
+#include "tensorflow/lite/delegates/gpu/dml/object_manager.h"
 #include "tensorflow/lite/kernels/internal/optimized/optimized_ops.h"
 #include "tensorflow/lite/minimal_logging.h"
 
@@ -84,6 +85,17 @@ class Delegate {
     }
   }
 
+  absl::Status BindTextureToTensor(ID3D12Resource* resource,
+                                   DXGI_FORMAT format,
+                                    int tensor_index) {
+    return external_objects_.RegisterResource(tensor_index,
+                                              D3DResource(resource, format));
+  }
+
+  void UnbindTextureToTensor(int tensor_index) {
+    external_objects_.RemoveResource(tensor_index);
+  }
+
   absl::Status Prepare(TfLiteContext* context,
                        const TfLiteDelegateParams* delegate_params) {
     if (!dml_device_) {
@@ -120,6 +132,7 @@ class Delegate {
   int num_delegate_kernels_ = 0;
 
   std::unique_ptr<DMLDevice> dml_device_;
+  ObjectManager external_objects_;
 
   friend class DelegateKernel;
 };
@@ -235,15 +248,25 @@ class DelegateKernel {
 
   ObjectDef GetObjectDef(int index) const {
     ObjectDef default_object_def;
-    default_object_def.data_type = DataType::FLOAT32;
-    default_object_def.data_layout = DataLayout::BHWC;
-    default_object_def.object_type = ObjectType::CPU_MEMORY;
+    if (delegate_->external_objects_.FindResource(index)) {
+      default_object_def.data_type = DataType::UINT32;
+      default_object_def.data_layout = DataLayout::BHWC;
+      default_object_def.object_type = ObjectType::DIRECTML_TEXTURE;
+    } else {
+      default_object_def.data_type = DataType::FLOAT32;
+      default_object_def.data_layout = DataLayout::BHWC;
+      default_object_def.object_type = ObjectType::CPU_MEMORY;
+    }
     default_object_def.user_provided = true;
     return default_object_def;
   }
 
   TensorObject GetTensorObject(int index, TfLiteContext* context) const {
     auto& tensor = context->tensors[index];
+    auto* resource = delegate_->external_objects_.FindResource(index);
+    if (resource) {
+      return DirectMlTexture(resource->Get(), resource->format());
+    }
     return MakeCpuMemory(absl::MakeSpan(tensor.data.raw, tensor.bytes));
   }
 
@@ -429,4 +452,25 @@ TfLiteDelegate* TfLiteGpuDelegateV2Create(
 
 void TfLiteGpuDelegateV2Delete(TfLiteDelegate* delegate) {
   delete tflite::gpu::dml::GetDelegate(delegate);
+}
+
+TfLiteStatus TfLiteGpuDelegateBindTextureToTensor(TfLiteDelegate* delegate,
+                                                  ID3D12Resource* resource,
+                                                  DXGI_FORMAT format,
+                                                  int tensor_index) {
+  auto* gpu_delegate = tflite::gpu::dml::GetDelegate(delegate);
+  return gpu_delegate &&
+                 gpu_delegate
+                     ->BindTextureToTensor(resource, format, tensor_index)
+                     .ok()
+             ? kTfLiteOk
+             : kTfLiteError;
+}
+
+void TfLiteGpuDelegateUnbindTextureToTensor(TfLiteDelegate* delegate,
+    int tensor_index) {
+  auto* gpu_delegate = tflite::gpu::dml::GetDelegate(delegate);
+  if (gpu_delegate) {
+    gpu_delegate->UnbindTextureToTensor(tensor_index);
+  }
 }

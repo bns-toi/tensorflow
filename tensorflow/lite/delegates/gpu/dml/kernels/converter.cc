@@ -55,6 +55,10 @@ class DirectMllShaderConverterImpl : public DirectMllConverterImpl {
                         const DirectMlResource* output) {
     return shader.Dispatch(device_, shape_.w, shape_.h, shape_.c, input, output);
   }
+  absl::Status Dispatch(const DirectMlTexture* input,
+                        const DirectMlResource* output) {
+    return shader.Dispatch(device_, shape_.w, shape_.h, shape_.c, input, output);
+  }
 
  protected:
   D3DShader shader;
@@ -71,14 +75,22 @@ class FromTensorConverter : public DirectMllShaderConverterImpl {
       : DirectMllShaderConverterImpl(device) {}
 
   static bool IsSupported(const ObjectDef& input, const ObjectDef& output) {
-    return IsSupportedDataType(input.data_type) &&
-           IsSupportedDataType(output.data_type) &&
-           // Output is always BUFFER/BHWC
-           output.object_type == ObjectType::DIRECTML_RESOURCE &&
-           output.data_layout == DataLayout::BHWC &&
-           // BUFFER/DHWC4 ->
-           input.object_type == ObjectType::DIRECTML_RESOURCE &&
-           input.data_layout == DataLayout::DHWC4;
+    return (IsSupportedDataType(input.data_type) &&
+            IsSupportedDataType(output.data_type) &&
+            // Output is always BUFFER/BHWC
+            output.object_type == ObjectType::DIRECTML_RESOURCE &&
+            output.data_layout == DataLayout::BHWC &&
+            // BUFFER/DHWC4 ->
+            input.object_type == ObjectType::DIRECTML_RESOURCE &&
+            input.data_layout == DataLayout::DHWC4) ||
+           (IsSupportedDataType(input.data_type) &&
+            output.data_type == DataType::UINT32 &&
+            // Output is always TEXTURE/BHWC
+            output.object_type == ObjectType::DIRECTML_TEXTURE &&
+            output.data_layout == DataLayout::BHWC &&
+            // BUFFER/DHWC4 ->
+            input.object_type == ObjectType::DIRECTML_RESOURCE &&
+            input.data_layout == DataLayout::DHWC4);
   }
 
   absl::Status Init(const TensorObjectDef& input_def,
@@ -108,7 +120,7 @@ class FromTensorConverter : public DirectMllShaderConverterImpl {
           output[index * channels + c] = input[index + planeSize * c];
         }
       }
-    })");
+    })", false);
   }
 
   absl::Status Convert(const TensorObject& input_obj,
@@ -136,14 +148,22 @@ class ToTensorConverter : public DirectMllShaderConverterImpl {
       : DirectMllShaderConverterImpl(device) {}
 
   static bool IsSupported(const ObjectDef& input, const ObjectDef& output) {
-    return IsSupportedDataType(input.data_type) &&
-           IsSupportedDataType(output.data_type) &&
-           // Input is always RESOURCE/BHWC
-           input.object_type == ObjectType::DIRECTML_RESOURCE &&
-           input.data_layout == DataLayout::BHWC &&
-           // RESOURCE/DHWC4 ->
-           output.object_type == ObjectType::DIRECTML_RESOURCE &&
-           output.data_layout == DataLayout::DHWC4;
+    return (IsSupportedDataType(input.data_type) &&
+            IsSupportedDataType(output.data_type) &&
+            // Input is always RESOURCE/BHWC
+            input.object_type == ObjectType::DIRECTML_RESOURCE &&
+            input.data_layout == DataLayout::BHWC &&
+            // RESOURCE/DHWC4 ->
+            output.object_type == ObjectType::DIRECTML_RESOURCE &&
+            output.data_layout == DataLayout::DHWC4) ||
+           (input.data_type == DataType::UINT32 &&
+            IsSupportedDataType(output.data_type) &&
+            // Input is always RESOURCE/BHWC
+            input.object_type == ObjectType::DIRECTML_TEXTURE &&
+            input.data_layout == DataLayout::BHWC &&
+            // RESOURCE/DHWC4 ->
+            output.object_type == ObjectType::DIRECTML_RESOURCE &&
+            output.data_layout == DataLayout::DHWC4);
   }
 
   absl::Status Init(const TensorObjectDef& input_def,
@@ -151,6 +171,35 @@ class ToTensorConverter : public DirectMllShaderConverterImpl {
                     Environment* environment) final {
     shape_ = BHWC(input_def.dimensions.b, input_def.dimensions.h,
                   input_def.dimensions.w, input_def.dimensions.c);
+
+    if (input_def.object_def.object_type == ObjectType::DIRECTML_TEXTURE) {
+      return shader.Compile(device_, R"(
+    Texture2D<half4> input : register(t0);
+    SamplerState linear_sampler : register(s0);
+    RWBuffer<half> output : register(u0);
+
+    cbuffer cbCS {
+      uint height;
+      uint width;
+      uint channels;
+    };
+
+    [numthreads(32, 16, 1)]
+    void main(uint3 blockID : SV_GroupID, uint3 threadID : SV_GroupThreadID) {
+      uint x = blockID.x * 32 + threadID.x;
+      uint y = blockID.y * 16 + threadID.y;
+      if (x < width && y < height) {
+        uint index = width * y + x;
+        uint planeSize = height * width;
+        float2 uv = float2((float)x / (float)width, (float)y / (float)height);
+        half4 tex = input.SampleLevel(linear_sampler, uv, 0);
+        half inputs[4] = { tex.r, tex.g, tex.b, tex.a };
+        for (uint c = 0; c < channels; c++) {
+          output[index + planeSize * c] = inputs[c];
+        }
+      }
+    })", true);
+    }
 
     return shader.Compile(device_, R"(
     Buffer<half> input : register(t0);
@@ -173,7 +222,7 @@ class ToTensorConverter : public DirectMllShaderConverterImpl {
           output[index + planeSize * c] = input[index * channels + c];
         }
       }
-    })");
+    })", false);
   }
 
   absl::Status Convert(const TensorObject& input_obj,
@@ -183,15 +232,15 @@ class ToTensorConverter : public DirectMllShaderConverterImpl {
       return absl::InvalidArgumentError(
           "Missing output in from_tensor converter");
     }
-    auto input = absl::get_if<DirectMlResource>(&input_obj);
-    if (!input || !input->resource) {
-      return absl::InvalidArgumentError("Missing input in converter");
+    auto input_resource = absl::get_if<DirectMlResource>(&input_obj);
+    if (input_resource && input_resource->resource) {
+      return Dispatch(input_resource, output);
     }
-    if (input->resource == output->resource) {
-      return absl::InvalidArgumentError("Can not execute inplace conversion");
+    auto input_texture = absl::get_if<DirectMlTexture>(&input_obj);
+    if (input_texture && input_texture->resource) {
+      return Dispatch(input_texture, output);
     }
-
-    return Dispatch(input, output);
+    return absl::InvalidArgumentError("Missing input in from_tensor converter");
   }
 };
 

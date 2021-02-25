@@ -39,12 +39,19 @@ class D3DResource {
       : resource_(resource),
         resource_ptr(resource_.Get()),
         data_type_(data_type),
-        bytes_size_(bytes_size) {}
+        bytes_size_(bytes_size),
+        format_(DXGI_FORMAT_B8G8R8A8_UNORM) {}
   D3DResource(ID3D12Resource* resource, DML_TENSOR_DATA_TYPE data_type,
               size_t bytes_size)
       : resource_ptr(resource),
         data_type_(data_type),
-        bytes_size_(bytes_size) {}
+        bytes_size_(bytes_size),
+        format_(DXGI_FORMAT_B8G8R8A8_UNORM) {}
+  D3DResource(ID3D12Resource* resource, DXGI_FORMAT format)
+      : resource_ptr(resource),
+        data_type_(DML_TENSOR_DATA_TYPE_FLOAT16),
+        bytes_size_(0),
+        format_(format) {}
 
   ~D3DResource();
 
@@ -62,12 +69,14 @@ class D3DResource {
   ID3D12Resource* Get() const { return resource_ptr; }
   DML_TENSOR_DATA_TYPE data_type() const { return data_type_; }
   size_t bytes_size() const { return bytes_size_; }
+  DXGI_FORMAT format() const { return format_; }
 
  private:
   Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
   ID3D12Resource* resource_ptr;
   DML_TENSOR_DATA_TYPE data_type_;
   size_t bytes_size_;
+  DXGI_FORMAT format_;
 
   absl::Status ReadResource(DMLDevice* device, void* data) const;
   absl::Status WriteResource(DMLDevice* device, const void* data);

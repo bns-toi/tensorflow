@@ -30,7 +30,7 @@ limitations under the License.
 
 // Let DirectML manage the data in the weight tensors. This can be faster on
 // some hardware.
-#define DML_MANAGED_WEIGHTS 1
+#define DML_MANAGED_WEIGHTS 0
 
 namespace tflite {
 namespace gpu {

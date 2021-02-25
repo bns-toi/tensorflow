@@ -78,6 +78,7 @@ class DefaultTensorTie : public TensorTie {
       const TensorObjectConverterBuilder& converter_builder) {
     auto object_type = def.external_def.object_def.object_type;
     return (object_type == ObjectType::DIRECTML_RESOURCE ||
+            object_type == ObjectType::DIRECTML_TEXTURE ||
             object_type == ObjectType::CPU_MEMORY) &&
            converter_builder.IsSupported(def.internal_def, def.external_def) &&
            converter_builder.IsSupported(def.external_def, def.internal_def);
@@ -428,7 +429,8 @@ class InferenceRunnerImpl : public InferenceRunner {
     return outputs_[index]->SetExternalObject(object);
   }
 
-#ifdef _DEBUG
+//#ifdef _DEBUG
+#if 1
     #define DUMP_TIME
 #endif  // _DEBUG
 
@@ -559,6 +561,9 @@ class InferenceBuilderImpl : public InferenceBuilder {
   }
 
   absl::Status Build(std::unique_ptr<InferenceRunner>* runner) override {
+#ifdef DUMP_TIME
+    auto start = std::chrono::system_clock::now();
+#endif  // DUMP_TIME
     auto external_objects = absl::make_unique<ObjectManager>();
     auto runtime = absl::make_unique<Runtime>(
         environment_->device(), external_objects.get(), allow_precision_loss_);
@@ -571,6 +576,11 @@ class InferenceBuilderImpl : public InferenceBuilder {
     RETURN_IF_ERROR(runtime_ptr->Compile(graph_));
 
     *runner = std::move(runner_impl);
+#ifdef DUMP_TIME
+    auto end = std::chrono::system_clock::now();
+    auto msec = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+    std::cout << "Build : " << msec << " ms \n";
+#endif // DUMP_TIME
     return absl::OkStatus();
   }
 

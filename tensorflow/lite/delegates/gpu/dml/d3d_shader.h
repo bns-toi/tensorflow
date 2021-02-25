@@ -30,19 +30,24 @@ class D3DShader {
   D3DShader();
   ~D3DShader();
 
-  absl::Status Compile(DMLDevice* device, const std::string& shader_source);
+  absl::Status Compile(DMLDevice* device, const std::string& shader_source,
+                       bool has_sampler);
   void Release();
   absl::Status Dispatch(DMLDevice* device, UINT width, UINT height,
-                        UINT channels,
-                        const DirectMlResource* input,
+                        UINT channels, const DirectMlResource* input,
                         const DirectMlResource* output);
-
-private:
+                        
+  absl::Status Dispatch(DMLDevice* device, UINT width, UINT height,
+                        UINT channels, const DirectMlTexture* input,
+                        const DirectMlResource* output);
+                        
+ private:
   ID3DBlob* shader;
   Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature;
   Microsoft::WRL::ComPtr<ID3D12PipelineState> pipeline_stat;
   Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptor_heap;
-  bool init_uav;
+  Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sampler_descriptor_heap;
+  bool init_srv;
 };
 
 }  // namespace dml

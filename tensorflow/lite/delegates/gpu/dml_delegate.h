@@ -141,6 +141,14 @@ TFL_CAPI_EXPORT TfLiteDelegate* TfLiteGpuDelegateV2Create(
 // Destroys a delegate created with `TfLiteGpuDelegateV2Create` call.
 TFL_CAPI_EXPORT void TfLiteGpuDelegateV2Delete(TfLiteDelegate* delegate);
 
+// Binds D3D12 texture to an input or an output tensor in theÅ@initialized delegate.
+TFL_CAPI_EXPORT TfLiteStatus TfLiteGpuDelegateBindTextureToTensor(
+    TfLiteDelegate* delegate, ID3D12Resource* resource,
+    DXGI_FORMAT format, int tensor_index);
+    
+TFL_CAPI_EXPORT void TfLiteGpuDelegateUnbindTextureToTensor(
+    TfLiteDelegate* delegate, int tensor_index);
+
 #ifdef __cplusplus
 }
 #endif  // __cplusplus

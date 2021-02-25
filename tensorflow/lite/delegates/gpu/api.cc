@@ -47,6 +47,9 @@ struct ObjectTypeGetter {
   ObjectType operator()(DirectMlResource) const {
     return ObjectType::DIRECTML_RESOURCE;
   }
+  ObjectType operator()(DirectMlTexture) const {
+    return ObjectType::DIRECTML_TEXTURE;
+  }
 #endif // TFLITE_GPU_DML
   ObjectType operator()(CpuMemory) const { return ObjectType::CPU_MEMORY; }
 };
@@ -69,6 +72,7 @@ struct ObjectValidityChecker {
 #endif // TFLITE_GPU_VK
 #ifdef TFLITE_GPU_DML
   bool operator()(DirectMlResource obj) const { return obj.resource; }
+  bool operator()(DirectMlTexture obj) const { return obj.resource; }
 #endif // TFLITE_GPU_DML
   bool operator()(CpuMemory obj) const {
     return obj.data != nullptr && obj.size_bytes > 0 &&
@@ -122,7 +126,9 @@ bool IsObjectPresent(ObjectType type, const TensorObject& obj) {
 #ifdef TFLITE_GPU_DML
     case ObjectType::DIRECTML_RESOURCE:
       return absl::holds_alternative<DirectMlResource>(obj);
-#endif // TFLITE_GPU_DML
+    case ObjectType::DIRECTML_TEXTURE:
+      return absl::holds_alternative<DirectMlTexture>(obj);
+#endif  // TFLITE_GPU_DML
     case ObjectType::UNKNOWN:
       return false;
   }

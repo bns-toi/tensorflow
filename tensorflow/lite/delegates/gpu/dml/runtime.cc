@@ -79,7 +79,8 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
         &CD3DX12_RESOURCE_DESC::Buffer(
             initialize_binding_properties.TemporaryResourceSize,
             D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
-        D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&temporary_buffer)));
+        D3D12_RESOURCE_STATE_COMMON, nullptr,
+        IID_PPV_ARGS(&initialize_temporary_buffer)));
   } else if (initialize_binding_properties.TemporaryResourceSize > 0) {
     initialize_temporary_buffer = temporary_buffer;
   }
@@ -106,8 +107,8 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
 
   if (initialize_temporary_buffer) {
     DML_BUFFER_BINDING buffer_binding{
-        temporary_buffer.Get(), 0,
-        execute_binding_properties.TemporaryResourceSize};
+        initialize_temporary_buffer.Get(), 0,
+        initialize_binding_properties.TemporaryResourceSize};        
     binding_table->BindTemporaryResource(
         &DML_BINDING_DESC{DML_BINDING_TYPE_BUFFER, &buffer_binding});
   }
@@ -126,8 +127,8 @@ absl::Status Runtime::Compile(const GraphFloat32& graph) {
     DML_BUFFER_BINDING buffer_binding{
         persistent_buffer.Get(), 0,
         execute_binding_properties.PersistentResourceSize};
-    DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
-    binding_table->BindOutputs(1, &binding_desc);
+    binding_table->BindOutputs(
+        1, &DML_BINDING_DESC{DML_BINDING_TYPE_BUFFER, &buffer_binding});
   }
 
   // The command recorder is a stateless object that records Dispatches into an existing Direct3D 12 command list.
@@ -168,6 +169,9 @@ D3DResource* Runtime::AllocateConstObject(const uint8_t* data,
 }
 
 absl::Status Runtime::Execute() {
+  DML_BINDING_PROPERTIES execute_binding_properties =
+      compiled_operator->GetBindingProperties();
+
   // Bind and execute the operator on the GPU.
   ID3D12DescriptorHeap* descriptor_heaps[] = {descriptor_heap.Get()};
   device->command_list->SetDescriptorHeaps(ARRAYSIZE(descriptor_heaps),
@@ -184,17 +188,18 @@ absl::Status Runtime::Execute() {
   DML_CHECK_SUCCEEDED(binding_table->Reset(&binding_table_desc));
 
   if (temporary_buffer) {
-    DML_BUFFER_BINDING buffer_binding{temporary_buffer.Get(), 0,
-                                      temporary_buffer->GetDesc().Width};
-    DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
-    binding_table->BindTemporaryResource(&binding_desc);
+    DML_BUFFER_BINDING buffer_binding{
+        temporary_buffer.Get(), 0,
+        execute_binding_properties.TemporaryResourceSize};
+    binding_table->BindTemporaryResource(
+        &DML_BINDING_DESC{DML_BINDING_TYPE_BUFFER, &buffer_binding});
   }
 
   if (persistent_buffer) {
     DML_BUFFER_BINDING buffer_binding{persistent_buffer.Get(), 0,
                                       persistent_buffer->GetDesc().Width};
-    DML_BINDING_DESC binding_desc{DML_BINDING_TYPE_BUFFER, &buffer_binding};
-    binding_table->BindPersistentResource(&binding_desc);
+    binding_table->BindPersistentResource(
+        &DML_BINDING_DESC{DML_BINDING_TYPE_BUFFER, &buffer_binding});
   }
 
   std::vector<DML_BUFFER_BINDING> buffer_bindings;

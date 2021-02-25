@@ -96,6 +96,7 @@ enum class ObjectType {
 #endif  // TFLITE_GPU_VK
 #ifdef TFLITE_GPU_DML
   DIRECTML_RESOURCE,
+  DIRECTML_TEXTURE,
 #endif  // TFLITE_GPU_DML
 };
 
@@ -182,7 +183,16 @@ struct DirectMlResource {
   size_t size_bytes = 0;
 
 };
-#endif // TFLITE_GPU_DML
+
+struct DirectMlTexture {
+  DirectMlTexture() = default;
+  explicit DirectMlTexture(ID3D12Resource* new_resource, DXGI_FORMAT new_format)
+      : resource(new_resource), format(new_format) {}
+
+  ID3D12Resource* resource = nullptr;
+  DXGI_FORMAT format = DXGI_FORMAT_B8G8R8A8_UNORM;
+};
+#endif  // TFLITE_GPU_DML
 
 struct CpuMemory {
   CpuMemory() = default;
@@ -281,7 +291,7 @@ using TensorObject =
                   , VulkanBuffer, VulkanTexture
 #endif // TFLITE_GPU_VK
 #ifdef TFLITE_GPU_DML
-                  , DirectMlResource
+                  , DirectMlResource, DirectMlTexture
 #endif // TFLITE_GPU_DML
                  >;
 
