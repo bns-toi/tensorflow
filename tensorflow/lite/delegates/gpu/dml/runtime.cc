@@ -157,7 +157,8 @@ D3DResource* Runtime::AllocateConstObject(const uint8_t* data,
                                           DML_TENSOR_DATA_TYPE data_type,
                                           uint32_t size) {
   D3DResource d3d_resource;
-  CreateResource(device, AccessType::WRITE, data_type, size, &d3d_resource);
+  CreateResource(device, false, AccessType::READ, data_type, size,
+                 &d3d_resource, L"Const");
 
   const_objects_.RegisterResource(next_const_id_, d3d_resource);
   D3DResource* resource = const_objects_.FindResource(next_const_id_);

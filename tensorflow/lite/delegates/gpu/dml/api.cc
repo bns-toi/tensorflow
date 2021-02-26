@@ -46,8 +46,8 @@ absl::Status WrapResource(DirectMlResource resource,
 
 absl::Status MaybeAllocateD3D12Resource(DMLDevice* device,
                                         const TensorObjectDef& def,
-                                        AccessType access_type,
-                                        D3DResource* resource) {
+                                        bool external, AccessType access_type,
+                                        D3DResource* resource, wchar_t* name) {                                        
   if (def.object_def.object_type != gpu::ObjectType::DIRECTML_RESOURCE) {
     return absl::InvalidArgumentError("Tensor object is not D3D Resource");
   }
@@ -61,8 +61,9 @@ absl::Status MaybeAllocateD3D12Resource(DMLDevice* device,
   ::dml::TensorDesc desc = ::dml::TensorDesc(data_type, dimensions);
 
   UINT64 tensor_buffer_size = desc.totalTensorSizeInBytes;
-  return CreateResource(device, access_type, data_type, tensor_buffer_size,
-                        resource);
+  return CreateResource(device, external, access_type, data_type,
+                        tensor_buffer_size,
+                        resource, name);
 }
 
 // Does one-step conversion between internal and external objects.
@@ -198,7 +199,9 @@ class DefaultTensorTie : public TensorTie {
       case gpu::ObjectType::DIRECTML_RESOURCE: {
         D3DResource resource;
         RETURN_IF_ERROR(MaybeAllocateD3D12Resource(
-            env->device(), d, def().access_type, &resource));
+            env->device(), d, false, def().access_type, &resource,
+            def().access_type == AccessType::READ ? L"InternalReadTensor"
+                                                  : L"InternalWriteTensor"));
         internal_obj_ = DirectMlResource{resource.Get(), resource.data_type(),
                                          resource.bytes_size()};
         RETURN_IF_ERROR(
@@ -227,7 +230,9 @@ class DefaultTensorTie : public TensorTie {
       }
       case ObjectType::DIRECTML_RESOURCE: {
         RETURN_IF_ERROR(MaybeAllocateD3D12Resource(
-            env->device(), d, def().access_type, &external_resource_));
+            env->device(), d, true, def().access_type, &external_resource_,
+            def().access_type == AccessType::READ ? L"ExternalReadTensor"
+                                                  : L"ExternalWriteTensor"));
         external_obj_ = DirectMlResource{external_resource_.Get(),
                                          external_resource_.data_type(),
                                          external_resource_.bytes_size()};
@@ -306,6 +311,8 @@ class TwoStepTensorTie : public TensorTie {
   static std::pair<TensorTieDef, TensorTieDef> MakeOuterInnerDefs(
       const TensorTieDef& def) {
     TensorTieDef outer_def;
+    outer_def.id = def.id;
+    outer_def.access_type = def.access_type;
     outer_def.external_def = def.external_def;
     outer_def.internal_def = def.external_def;
     outer_def.internal_def.object_def.object_type = ObjectType::DIRECTML_RESOURCE;
@@ -314,6 +321,7 @@ class TwoStepTensorTie : public TensorTie {
 
     TensorTieDef inner_def;
     inner_def.id = def.id;
+    inner_def.access_type = def.access_type;
     inner_def.external_def = outer_def.internal_def;
     // Should not allocate external object.
     inner_def.external_def.object_def.user_provided = false;
@@ -542,6 +550,7 @@ class InferenceBuilderImpl : public InferenceBuilder {
       return absl::InvalidArgumentError(
           "New object definition is not supported.");
     }
+//    def.access_type = AccessType::WRITE;
     inputs_[index] = def;
     return absl::OkStatus();
   }
@@ -556,6 +565,7 @@ class InferenceBuilderImpl : public InferenceBuilder {
       return absl::InvalidArgumentError(
           "New object definition is not supported.");
     }
+//    def.access_type = AccessType::READ;
     outputs_[index] = def;
     return absl::OkStatus();
   }

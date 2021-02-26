@@ -83,9 +83,11 @@ class D3DResource {
   absl::Status CopyResource(DMLDevice* device, const D3DResource& src_resource);
 };
 
-absl::Status CreateResource(DMLDevice* device, AccessType access_type,
-                            DML_TENSOR_DATA_TYPE data_type, UINT64 size,
-                            D3DResource* d3d_resource);
+absl::Status CreateResource(DMLDevice* device, bool external,
+                            AccessType access_type,
+                            DML_TENSOR_DATA_TYPE data_type,
+                            UINT64 size, D3DResource* d3d_resource,
+                            const wchar_t* name);                            
 
 template <typename T>
 absl::Status D3DResource::Read(DMLDevice* device, absl::Span<T> data) const {

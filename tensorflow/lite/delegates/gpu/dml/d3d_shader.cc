@@ -119,6 +119,73 @@ struct ImageLayoutCB {
 // Divide and round up
 static UINT DivUp(UINT a, UINT b) { return (a + b - 1) / b; }
 
+void D3DShader::CreateShaderResourceView(DMLDevice* device,
+                                         const DirectMlResource* input) {
+  // Describe and create a SRV for the input tensor.
+  D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+  srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srv_desc.Format = input->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
+                        ? DXGI_FORMAT_R32_FLOAT
+                        : DXGI_FORMAT_R16_FLOAT;
+  srv_desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
+  srv_desc.Buffer.FirstElement = 0;
+  UINT data_size = input->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
+                       ? sizeof(float)
+                       : sizeof(uint16_t);
+  srv_desc.Buffer.NumElements =
+      static_cast<UINT>(input->resource->GetDesc().Width / data_size);
+  srv_desc.Buffer.StructureByteStride = 0;
+  srv_desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
+
+  device->d3d_device->CreateShaderResourceView(
+      input->resource, &srv_desc,
+      descriptor_heap->GetCPUDescriptorHandleForHeapStart());
+}
+
+void D3DShader::CreateShaderResourceView(DMLDevice* device,
+                                         const DirectMlTexture* input) {
+  // Describe and create a SRV for the input texture.
+  D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+  srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srv_desc.Format = input->format;
+  srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srv_desc.Texture2D.MostDetailedMip = 0;
+  srv_desc.Texture2D.MipLevels = 1;
+  srv_desc.Texture2D.PlaneSlice = 0;
+
+  device->d3d_device->CreateShaderResourceView(
+      input->resource, &srv_desc,
+      descriptor_heap->GetCPUDescriptorHandleForHeapStart());
+}
+
+void D3DShader::CreateUnorderedAccessView(DMLDevice* device,
+                                          const DirectMlResource* output) {
+  // Describe and create a UAV for the output tensor.
+  D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+  uav_desc.Format = output->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
+                        ? DXGI_FORMAT_R32_FLOAT
+                        : DXGI_FORMAT_R16_FLOAT;
+  uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
+  uav_desc.Buffer.FirstElement = 0;
+  UINT data_size = output->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
+                  ? sizeof(float)
+                  : sizeof(uint16_t);
+  uav_desc.Buffer.NumElements =
+      static_cast<UINT>(output->resource->GetDesc().Width / data_size);
+  uav_desc.Buffer.StructureByteStride = 0;
+  uav_desc.Buffer.CounterOffsetInBytes = 0;
+  uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
+
+  D3D12_CPU_DESCRIPTOR_HANDLE handle =
+      descriptor_heap->GetCPUDescriptorHandleForHeapStart();
+  UINT64 increment = device->d3d_device->GetDescriptorHandleIncrementSize(
+      D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+  handle.ptr = static_cast<SIZE_T>(handle.ptr + UINT64(1) * increment);
+
+  device->d3d_device->CreateUnorderedAccessView(output->resource, nullptr,
+                                                &uav_desc, handle);
+}
+
 absl::Status D3DShader::Dispatch(DMLDevice* device, UINT width, UINT height,
                                  UINT channels,
                                  const DirectMlResource* input,
@@ -128,50 +195,10 @@ absl::Status D3DShader::Dispatch(DMLDevice* device, UINT width, UINT height,
     init_srv = true;
 
     // Describe and create a SRV for the input tensor.
-    D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srv_desc.Format = input->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
-                          ? DXGI_FORMAT_R32_FLOAT
-                          : DXGI_FORMAT_R16_FLOAT;
-    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_BUFFER;
-    srv_desc.Buffer.FirstElement = 0;
-    UINT data_size = input->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
-                    ? sizeof(float)
-                    : sizeof(uint16_t);
-    srv_desc.Buffer.NumElements =
-        static_cast<UINT>(input->resource->GetDesc().Width / data_size);
-    srv_desc.Buffer.StructureByteStride = 0;
-    srv_desc.Buffer.Flags = D3D12_BUFFER_SRV_FLAG_NONE;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE handle =
-        descriptor_heap->GetCPUDescriptorHandleForHeapStart();
-
-    device->d3d_device->CreateShaderResourceView(input->resource, &srv_desc,
-                                                 handle);
+    CreateShaderResourceView(device, input);
 
     // Describe and create a UAV for the output tensor.
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
-    uav_desc.Format = output->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
-                          ? DXGI_FORMAT_R32_FLOAT
-                          : DXGI_FORMAT_R16_FLOAT;
-    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uav_desc.Buffer.FirstElement = 0;
-    data_size = output->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
-                         ? sizeof(float)
-                         : sizeof(uint16_t);
-    uav_desc.Buffer.NumElements =
-        static_cast<UINT>(output->resource->GetDesc().Width / data_size);
-    uav_desc.Buffer.StructureByteStride = 0;
-    uav_desc.Buffer.CounterOffsetInBytes = 0;
-    uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
-
-    UINT64 increment = device->d3d_device->GetDescriptorHandleIncrementSize(
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    handle.ptr = static_cast<SIZE_T>(handle.ptr + UINT64(1) * increment);
-
-    device->d3d_device->CreateUnorderedAccessView(output->resource, nullptr,
-                                                  &uav_desc, handle);
-
+    CreateUnorderedAccessView(device, output);
   }
 
   ID3D12DescriptorHeap* descriptor_heaps[] = {descriptor_heap.Get()};
@@ -210,43 +237,12 @@ absl::Status D3DShader::Dispatch(DMLDevice* device, UINT width, UINT height,
                                  const DirectMlResource* output) {
 
   // Describe and create a SRV for the input texture.
-  D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-  srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-  srv_desc.Format = input->format;
-  srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
-  srv_desc.Texture2D.MostDetailedMip = 0;
-  srv_desc.Texture2D.MipLevels = 1;
-  srv_desc.Texture2D.PlaneSlice = 0;
-
-  device->d3d_device->CreateShaderResourceView(input->resource, &srv_desc,
-      descriptor_heap->GetCPUDescriptorHandleForHeapStart());
+  CreateShaderResourceView(device, input);
 
   if (init_srv == false) {
     init_srv = true;
     // Describe and create a UAV for the output tensor.
-    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
-    uav_desc.Format = output->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
-                          ? DXGI_FORMAT_R32_FLOAT
-                          : DXGI_FORMAT_R16_FLOAT;
-    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_BUFFER;
-    uav_desc.Buffer.FirstElement = 0;
-    UINT data_size = output->data_type == DML_TENSOR_DATA_TYPE_FLOAT32
-                         ? sizeof(float)
-                         : sizeof(uint16_t);
-    uav_desc.Buffer.NumElements =
-        static_cast<UINT>(output->resource->GetDesc().Width / data_size);
-    uav_desc.Buffer.StructureByteStride = 0;
-    uav_desc.Buffer.CounterOffsetInBytes = 0;
-    uav_desc.Buffer.Flags = D3D12_BUFFER_UAV_FLAG_NONE;
-
-    D3D12_CPU_DESCRIPTOR_HANDLE handle =
-        descriptor_heap->GetCPUDescriptorHandleForHeapStart();
-    UINT64 increment = device->d3d_device->GetDescriptorHandleIncrementSize(
-        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    handle.ptr = static_cast<SIZE_T>(handle.ptr + UINT64(1) * increment);
-
-    device->d3d_device->CreateUnorderedAccessView(output->resource, nullptr,
-                                                  &uav_desc, handle);
+    CreateUnorderedAccessView(device, output);
   
     // Describe and create a Sampler.
     D3D12_SAMPLER_DESC sampler_desc = {};

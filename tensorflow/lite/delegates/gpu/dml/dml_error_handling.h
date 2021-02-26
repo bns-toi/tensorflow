@@ -19,5 +19,5 @@ limitations under the License.
 
 #define DML_CHECK_SUCCEEDED(hr)      \
   do {                               \
-    CHECK_EQ(SUCCEEDED((hr)), true); \
+    CHECK_GE(((HRESULT)(hr)), 0);    \
   } while (0)

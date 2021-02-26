@@ -133,6 +133,14 @@ absl::Status CreateDefaultGPUDevice(DMLDevice* result) {
     }
   }
 
+#ifdef _DEBUG
+  ComPtr<ID3D12Debug1> debug1;
+  if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug1)))) {
+    debug1->EnableDebugLayer();
+    debug1->SetEnableGPUBasedValidation(true);
+  }
+#endif // _DEBUG
+
   ComPtr<ID3D12Device> d3d_device;
   DML_CHECK_SUCCEEDED(D3D12CreateDevice(adapter.Get(), feature_level,
                                         IID_PPV_ARGS(&d3d_device)));

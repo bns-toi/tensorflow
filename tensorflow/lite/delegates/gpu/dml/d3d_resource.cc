@@ -111,19 +111,26 @@ absl::Status D3DResource::Copy(DMLDevice* device,
   return CopyResource(device, src_resource);
 }
 
-absl::Status CreateResource(DMLDevice* device, AccessType access_type,
+absl::Status CreateResource(DMLDevice* device, bool external,
+                            AccessType access_type,
                             DML_TENSOR_DATA_TYPE data_type, UINT64 size,
-                            D3DResource* d3d_resource) {
+                            D3DResource* d3d_resource, const wchar_t* name) {
   ComPtr<ID3D12Resource> resource;
 
   DML_CHECK_SUCCEEDED(device->d3d_device->CreateCommittedResource(
       &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
       D3D12_HEAP_FLAG_NONE,
       &CD3DX12_RESOURCE_DESC::Buffer(size, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
-      access_type == AccessType::WRITE ? D3D12_RESOURCE_STATE_COPY_DEST
-                                       : D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+      external ? access_type == AccessType::WRITE
+                     ? D3D12_RESOURCE_STATE_UNORDERED_ACCESS
+                     : D3D12_RESOURCE_STATE_COPY_DEST
+               : D3D12_RESOURCE_STATE_COMMON,
       nullptr,
       IID_PPV_ARGS(&resource)));
+
+#ifdef _DEBUG
+  DML_CHECK_SUCCEEDED(resource->SetName(name));
+#endif // _DEBUG
 
   *d3d_resource = D3DResource(resource, data_type, size);
   return absl::OkStatus();
@@ -131,4 +138,4 @@ absl::Status CreateResource(DMLDevice* device, AccessType access_type,
 
 }  // namespace dml
 }  // namespace gpu
-}  // namespace tflite
+}  // namespace tflite7

@@ -48,6 +48,13 @@ class D3DShader {
   Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> descriptor_heap;
   Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> sampler_descriptor_heap;
   bool init_srv;
+
+  void CreateShaderResourceView(DMLDevice* device,
+                                const DirectMlResource* input);
+  void CreateShaderResourceView(DMLDevice* device,
+                                const DirectMlTexture* input);
+  void CreateUnorderedAccessView(DMLDevice* device,
+                                 const DirectMlResource* output);
 };
 
 }  // namespace dml
